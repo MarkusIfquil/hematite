@@ -778,7 +778,7 @@ fn set_font<C: Connection>(conn: &C, id_font: u32, config: &Config) -> Res {
             log::info!("setting font to {}", config.font);
         }
         Err(_) => {
-            log::error!("BAD FONT, USING DEFAULT");
+            log::error!("bad font, using default");
             conn.open_font(id_font, config::FONT.as_bytes())?.check()?
         }
     };

@@ -1,5 +1,6 @@
+use core::fmt;
 use std::fmt::Debug;
-use x11rb::{errors::ReplyOrIdError};
+use x11rb::errors::ReplyOrIdError;
 type Window = u32;
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub enum WindowGroup {
@@ -31,17 +32,15 @@ impl WindowState {
             group: WindowGroup::Stack,
         })
     }
-    pub fn print(&self) {
-        log::debug!(
+}
+
+impl fmt::Display for WindowState {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
             "id {} fid {} x {} y {} w {} h {} g {:?}",
-            self.window,
-            self.frame_window,
-            self.x,
-            self.y,
-            self.width,
-            self.height,
-            self.group
-        );
+            self.window, self.frame_window, self.x, self.y, self.width, self.height, self.group
+        )
     }
 }
 
@@ -60,6 +59,22 @@ impl Tag {
     }
 }
 
+impl fmt::Display for Tag {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "tag {} | focus {:?} | windows:\n{}",
+            self.tag,
+            self.focus,
+            self.windows
+                .iter()
+                .map(|w| format!("{w}\n"))
+                .collect::<Vec<String>>()
+                .join("")
+        )
+    }
+}
+
 pub struct TilingInfo {
     pub gap: u16,
     pub ratio: f32,
@@ -72,6 +87,22 @@ pub struct StateHandler {
     pub tags: Vec<Tag>,
     pub active_tag: usize,
     pub tiling: TilingInfo,
+}
+
+impl fmt::Display for StateHandler {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "active tag {}\ntags:\n{}",
+            self.tags
+                .iter()
+                .filter(|t| !t.windows.is_empty())
+                .map(|t| format!("{t}"))
+                .collect::<Vec<String>>()
+                .join(""),
+            self.active_tag
+        )
+    }
 }
 
 impl StateHandler {
@@ -226,18 +257,7 @@ impl StateHandler {
     }
 
     pub fn print_state(&self) {
-        log::debug!(
-            "Manager state: active tag {} focus {:?}",
-            self.active_tag,
-            self.tags[self.active_tag].focus
-        );
-        self.tags
-            .iter()
-            .filter(|t| !t.windows.is_empty())
-            .for_each(|t| {
-                log::debug!("tag {} windows:", t.tag);
-                t.windows.iter().for_each(|w| w.print());
-            });
+        log::debug!("Manager state:\n{}", self);
     }
 
     fn get_index_of_window(&self, window: Window) -> Option<usize> {

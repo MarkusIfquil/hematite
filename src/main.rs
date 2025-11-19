@@ -51,8 +51,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     loop {
         if let Ok(_) = rx.try_recv() {
-            conn_handler.draw_bar(&event_handler.man,event_handler.man.get_focus())?;
-            conn_handler.draw_status_bar()?;
+            match conn_handler
+                .draw_bar(&event_handler.man, event_handler.man.get_focus())
+                .and(conn_handler.draw_status_bar())
+            {
+                Err(e) => log::error!("{}", e),
+                Ok(_) => {}
+            }
         }
         conn.flush()?;
         let event = conn.wait_for_event()?;
@@ -60,8 +65,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
         while let Some(event) = event_as_option {
             match event_handler.handle_event(event) {
-                Ok(_) => (),
                 Err(e) => log::error!("{}", e),
+                Ok(_) => (),
             };
             event_as_option = conn.poll_for_event()?;
         }

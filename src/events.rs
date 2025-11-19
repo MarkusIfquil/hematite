@@ -46,7 +46,7 @@ impl<'a, C: Connection> EventHandler<'a, C> {
             return Ok(());
         };
 
-        log::debug!(
+        log::trace!(
             "EVENT MAP window {} parent {} response {}",
             event.window,
             event.parent,
@@ -65,7 +65,7 @@ impl<'a, C: Connection> EventHandler<'a, C> {
             Some(w) => w,
             None => return Ok(()),
         };
-        log::debug!(
+        log::trace!(
             "EVENT UNMAP window {} event {} from config {} response {}",
             event.window,
             event.event,
@@ -89,7 +89,7 @@ impl<'a, C: Connection> EventHandler<'a, C> {
             None => return Ok(()),
         };
 
-        log::debug!(
+        log::trace!(
             "EVENT KEYPRESS code {} sym {:?} action {:?}",
             event.detail,
             event.state,
@@ -133,7 +133,7 @@ impl<'a, C: Connection> EventHandler<'a, C> {
     }
 
     fn handle_enter(&mut self, event: EnterNotifyEvent) -> Res {
-        log::debug!(
+        log::trace!(
             "EVENT ENTER child {} detail {:?} event {}",
             event.child,
             event.detail,
@@ -161,7 +161,7 @@ impl<'a, C: Connection> EventHandler<'a, C> {
     fn handle_client_message(&mut self, event: ClientMessageEvent) -> Res {
         let data = event.data.as_data32();
 
-        log::debug!("got client data {data:?}");
+        log::trace!("got client data {data:?}");
         if data[1] == 0 {
             return Ok(());
         }
@@ -170,7 +170,7 @@ impl<'a, C: Connection> EventHandler<'a, C> {
 
         let first_property = self.conn.get_atom_name(data[1])?;
 
-        log::debug!(
+        log::trace!(
             "GOT CLIENT EVENT window {} atom {:?} first prop {:?}",
             event.window,
             event_type,
@@ -178,7 +178,6 @@ impl<'a, C: Connection> EventHandler<'a, C> {
         );
 
         match event_type.as_str() {
-            "_NET_WM_MOVERESIZE" => log::info!("GOT MOVERESIZE!!"),
             "_NET_WM_STATE" => match first_property.as_str() {
                 "_NET_WM_STATE_FULLSCREEN" => {
                     let state = match self.man.get_mut_window_state(event.window) {
@@ -241,10 +240,10 @@ impl<'a, C: Connection> EventHandler<'a, C> {
 
     fn change_active_tag(&mut self, tag: usize) -> Res {
         if self.man.active_tag == tag {
-            log::error!("tried switching to already active tag");
+            log::debug!("tried switching to already active tag");
             return Ok(());
         }
-        log::debug!("changing tag to {tag}");
+        log::trace!("changing tag to {tag}");
         self.unmap_tag()?;
         self.man.active_tag = tag;
         self.map_tag()?;
@@ -275,10 +274,10 @@ impl<'a, C: Connection> EventHandler<'a, C> {
 
     fn move_window(&mut self, tag: usize) -> Res {
         if self.man.active_tag == tag {
-            log::error!("tried moving window to already active tag");
+            log::debug!("tried moving window to already active tag");
             return Ok(());
         }
-        log::debug!("moving window to tag {tag}");
+        log::trace!("moving window to tag {tag}");
 
         let focus_window = self.conn.get_focus()?;
 
