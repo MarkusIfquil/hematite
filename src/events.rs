@@ -55,7 +55,7 @@ impl<'a, C: Connection> EventHandler<'a, C> {
 
         let window = WindowState::new(event.window, self.conn.conn.generate_id()?)?;
 
-        self.conn.create_frame_of_window(&window)?;
+        self.conn.add_window(&window)?;
         self.man.add_window(window);
         self.refresh()
     }
@@ -74,6 +74,7 @@ impl<'a, C: Connection> EventHandler<'a, C> {
         );
 
         self.conn.destroy_window(window)?;
+        self.conn.update_client_list(&self.man)?;
 
         self.man
             .get_mut_active_tag_windows()
@@ -160,6 +161,7 @@ impl<'a, C: Connection> EventHandler<'a, C> {
     fn handle_client_message(&mut self, event: ClientMessageEvent) -> Res {
         let data = event.data.as_data32();
 
+        log::debug!("got client data {data:?}");
         if data[1] == 0 {
             return Ok(());
         }
@@ -168,7 +170,6 @@ impl<'a, C: Connection> EventHandler<'a, C> {
 
         let first_property = self.conn.get_atom_name(data[1])?;
 
-        log::debug!("got client data {data:?}");
         log::debug!(
             "GOT CLIENT EVENT window {} atom {:?} first prop {:?}",
             event.window,
@@ -177,6 +178,7 @@ impl<'a, C: Connection> EventHandler<'a, C> {
         );
 
         match event_type.as_str() {
+            "_NET_WM_MOVERESIZE" => log::info!("GOT MOVERESIZE!!"),
             "_NET_WM_STATE" => match first_property.as_str() {
                 "_NET_WM_STATE_FULLSCREEN" => {
                     let state = match self.man.get_mut_window_state(event.window) {
@@ -246,6 +248,7 @@ impl<'a, C: Connection> EventHandler<'a, C> {
         self.unmap_tag()?;
         self.man.active_tag = tag;
         self.map_tag()?;
+        self.conn.update_active_desktop(tag as u32)?;
         Ok(())
     }
 
@@ -279,10 +282,9 @@ impl<'a, C: Connection> EventHandler<'a, C> {
 
         let focus_window = self.conn.get_focus()?;
 
-        let state = if let Some(s) = self.man.get_window_state(focus_window) {
-            *s
-        } else {
-            return Ok(());
+        let state = match self.man.get_window_state(focus_window) {
+            Some(s) => *s,
+            None => return Ok(()),
         };
         self.conn.unmap(&state)?;
 
@@ -291,6 +293,10 @@ impl<'a, C: Connection> EventHandler<'a, C> {
             .windows
             .retain(|w| w.window != focus_window);
         self.man.set_tag_focus_to_master();
+
+        self.conn
+            .update_window_desktop(focus_window, self.man.active_tag as u32)?;
+
         Ok(())
     }
 }

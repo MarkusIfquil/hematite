@@ -3,6 +3,7 @@ use std::process::Command;
 use std::process::exit;
 
 use x11rb::protocol::xproto::ConnectionExt;
+use x11rb::wrapper::ConnectionExt as OtherConnectionExt;
 use x11rb::{
     COPY_DEPTH_FROM_PARENT, CURRENT_TIME,
     connection::Connection,
@@ -38,18 +39,14 @@ impl<'a, C: Connection> ConnectionHandler<'a, C> {
     pub fn new(conn: &'a C, screen_num: usize, config: &Config) -> Result<Self, ReplyOrIdError> {
         let screen = &conn.setup().roots[screen_num];
         become_window_manager(conn, screen.root)?;
-        log::debug!("screen num {screen_num} root {}", screen.root);
+
+        log::trace!("screen num {screen_num} root {}", screen.root);
 
         let id_graphics_context = conn.generate_id()?;
         let id_inverted_graphics_context = conn.generate_id()?;
         let id_font = conn.generate_id()?;
 
         let atom_strings = vec![
-            "UTF8_STRING",
-            "WM_PROTOCOLS",
-            "WM_DELETE_WINDOW",
-            "WM_NAME",
-            "_NET_WM_NAME",
             "_NET_SUPPORTED",
             "_NET_CLIENT_LIST",
             "_NET_NUMBER_OF_DESKTOPS",
@@ -60,37 +57,23 @@ impl<'a, C: Connection> ConnectionHandler<'a, C> {
             "_NET_ACTIVE_WINDOW",
             "_NET_WORKAREA",
             "_NET_SUPPORTING_WM_CHECK",
-            "_NET_VIRTUAL_ROOTS",
-            "_NET_DESKTOP_LAYOUT",
-            "_NET_SHOWING_DESKTOP",
+            "_NET_CLOSE_WINDOW",
+            "_NET_MOVERESIZE_WINDOW",
+            "_NET_WM_MOVERESIZE",
+            "_NET_RESTACK_WINDOW",
+            "_NET_FRAME_EXTENTS",
             "_NET_WM_NAME",
-            "_NET_WM_ALLOWED_ACTIONS",
-            "_NET_WM_STATE_MODAL",
+            "_NET_WM_DESKTOP",
             "_NET_WM_STATE",
-            "_NET_WM_STATE_STICKY",
-            "_NET_WM_STATE_MAXIMIZED_VERT",
-            "_NET_WM_STATE_MAXIMIZED_HORZ",
-            "_NET_WM_STATE_SHADED",
-            "_NET_WM_STATE_SKIP_TASKBAR",
-            "_NET_WM_STATE_SKIP_PAGER",
-            "_NET_WM_STATE_HIDDEN",
             "_NET_WM_STATE_FULLSCREEN",
-            "_NET_WM_STATE_ABOVE",
-            "_NET_WM_STATE_BELOW",
-            "_NET_WM_STATE_DEMANDS_ATTENTION",
-            "_NET_WM_STATE_FOCUSED",
-            "_NET_WM_ACTION_MOVE",
-            "_NET_WM_ACTION_RESIZE",
-            "_NET_WM_ACTION_MINIMIZE",
-            "_NET_WM_ACTION_SHADE",
-            "_NET_WM_ACTION_STICK",
-            "_NET_WM_ACTION_MAXIMIZE_HORZ",
-            "_NET_WM_ACTION_MAXIMIZE_VERT",
+            "_NET_WM_ALLOWED_ACTIONS",
             "_NET_WM_ACTION_FULLSCREEN",
-            "_NET_WM_ACTION_CHANGE_DESKTOP",
-            "_NET_WM_ACTION_CLOSE",
-            "_NET_WM_ACTION_ABOVE",
-            "_NET_WM_ACTION_BELOW",
+            "_NET_WM_USER_TIME",
+            "UTF8_STRING",
+            "WM_NAME",
+            "WM_PROTOCOLS",
+            "WM_STATE",
+            "WM_DELETE_WINDOW",
         ];
 
         let atom_nums = get_atom_nums(conn, &atom_strings)?;
@@ -122,7 +105,7 @@ impl<'a, C: Connection> ConnectionHandler<'a, C> {
 
         //get font parameters
         let f = conn.query_font(id_font)?.reply()?.max_bounds;
-        log::debug!(
+        log::trace!(
             "got font parameters ascent {} descent {} width {}",
             f.ascent,
             f.descent,
@@ -152,39 +135,58 @@ impl<'a, C: Connection> ConnectionHandler<'a, C> {
             },
         };
 
-        handler.change_atom_prop(screen.root, "_NET_SUPPORTED", unsafe {
-            atom_nums.as_slice().align_to::<u8>().1
-        })?;
         handler.add_heartbeat_window()?;
         handler.grab_keys(&KeyHandler::new(conn, &config)?)?;
         handler.set_cursor()?;
         handler.create_bar_window()?;
 
+        handler.change_atom_prop(screen.root, "_NET_SUPPORTED", &atom_nums)?;
+        handler.change_cardinal_prop(screen.root, "_NET_NUMBER_OF_DESKTOPS", &[9])?;
+        handler.change_cardinal_prop(
+            screen.root,
+            "_NET_DESKTOP_GEOMETRY",
+            &[
+                screen.width_in_pixels as u32,
+                screen.height_in_pixels as u32,
+            ],
+        )?;
+        handler.change_cardinal_prop(screen.root, "_NET_DESKTOP_VIEWPORT", &[0, 0])?;
+        handler.change_cardinal_prop(
+            screen.root,
+            "_NET_WORKAREA",
+            &[
+                0,
+                0,
+                screen.width_in_pixels as u32,
+                screen.height_in_pixels as u32 - handler.bar.height as u32,
+            ],
+        )?;
+
         Ok(handler)
     }
 
     pub fn map(&self, window: &WindowState) -> Res {
-        log::debug!("handling map of {}", window.window);
+        log::trace!("handling map of {}", window.window);
         self.conn.map_window(window.frame_window)?;
         self.conn.map_window(window.window)?;
         Ok(())
     }
 
     pub fn unmap(&self, window: &WindowState) -> Res {
-        log::debug!("handling unmap of {}", window.window);
+        log::trace!("handling unmap of {}", window.window);
         self.conn.unmap_window(window.window)?;
         self.conn.unmap_window(window.frame_window)?;
         Ok(())
     }
 
     pub fn refresh(&self, wm_state: &StateHandler) -> Res {
-        log::debug!("refreshing");
+        log::trace!("refreshing");
         self.draw_bar(wm_state, wm_state.tags[wm_state.active_tag].focus)?;
         Ok(())
     }
 
     pub fn handle_config(&self, event: ConfigureRequestEvent) -> Res {
-        log::debug!(
+        log::trace!(
             "EVENT CONFIG w {} x {} y {} w {} h {}",
             event.window,
             event.x,
@@ -197,8 +199,8 @@ impl<'a, C: Connection> ConnectionHandler<'a, C> {
         Ok(())
     }
 
-    pub fn create_frame_of_window(&self, window: &WindowState) -> Res {
-        log::debug!("creating frame of {}", window.window);
+    pub fn add_window(&self, window: &WindowState) -> Res {
+        log::trace!("creating frame of {}", window.window);
         self.conn.create_window(
             COPY_DEPTH_FROM_PARENT,
             window.frame_window,
@@ -216,7 +218,7 @@ impl<'a, C: Connection> ConnectionHandler<'a, C> {
                         | EventMask::SUBSTRUCTURE_NOTIFY
                         | EventMask::ENTER_WINDOW
                         | EventMask::PROPERTY_CHANGE
-                        | EventMask::RESIZE_REDIRECT,
+                        | EventMask::RESIZE_REDIRECT
                 )
                 .background_pixel(self.graphics.0)
                 .border_pixel(self.graphics.1),
@@ -234,24 +236,30 @@ impl<'a, C: Connection> ConnectionHandler<'a, C> {
         )?;
 
         let allowed_actions = [
-            "_NET_WM_ACTION_MOVE",
-            "_NET_WM_ACTION_RESIZE",
-            "_NET_WM_ACTION_MINIMIZE",
-            "_NET_WM_ACTION_SHADE",
-            "_NET_WM_ACTION_STICK",
-            "_NET_WM_ACTION_MAXIMIZE_HORZ",
-            "_NET_WM_ACTION_MAXIMIZE_VERT",
             "_NET_WM_ACTION_FULLSCREEN",
-            "_NET_WM_ACTION_CHANGE_DESKTOP",
-            "_NET_WM_ACTION_CLOSE",
-            "_NET_WM_ACTION_ABOVE",
-            "_NET_WM_ACTION_BELOW",
         ]
         .map(|a| self.atoms[a]);
 
-        self.change_atom_prop(window.window, "_NET_WM_ALLOWED_ACTIONS", &unsafe {
-            allowed_actions.align_to::<u8>().1
-        })?;
+        self.change_atom_prop(window.window, "_NET_WM_ALLOWED_ACTIONS", &allowed_actions)?;
+
+        self.change_cardinal_prop(
+            window.window,
+            "_NET_FRAME_EXTENTS",
+            &[
+                self.config.border_size,
+                self.config.border_size,
+                self.config.border_size,
+                self.config.border_size,
+            ],
+        )?;
+
+        self.conn.change_property32(
+            PropMode::REPLACE,
+            window.window,
+            self.atoms["WM_STATE"],
+            self.atoms["WM_STATE"],
+            &[1, 0],
+        )?;
 
         self.conn.grab_server()?;
         self.conn.change_save_set(SetMode::INSERT, window.window)?;
@@ -263,7 +271,7 @@ impl<'a, C: Connection> ConnectionHandler<'a, C> {
     }
 
     pub fn destroy_window(&self, window: &WindowState) -> Res {
-        log::debug!("destroying window: {}", window.window);
+        log::trace!("destroying window: {}", window.window);
         self.conn.change_save_set(SetMode::DELETE, window.window)?;
         self.conn
             .reparent_window(window.window, self.screen.root, window.x, window.y)?;
@@ -273,7 +281,7 @@ impl<'a, C: Connection> ConnectionHandler<'a, C> {
     }
 
     pub fn set_focus_window(&self, windows: &Vec<WindowState>, window: &WindowState) -> Res {
-        log::debug!("setting focus to: {:?}", window.window);
+        log::trace!("setting focus to: {:?}", window.window);
         self.conn
             .set_input_focus(InputFocus::PARENT, window.window, CURRENT_TIME)?;
 
@@ -297,6 +305,9 @@ impl<'a, C: Connection> ConnectionHandler<'a, C> {
             window.frame_window,
             &ChangeWindowAttributesAux::new().border_pixel(self.graphics.1),
         )?;
+
+        self.change_window_prop(self.screen.root, "_NET_ACTIVE_WINDOW", &[window.window])?;
+
         Ok(())
     }
 
@@ -305,7 +316,7 @@ impl<'a, C: Connection> ConnectionHandler<'a, C> {
     }
 
     pub fn config_window_from_state(&self, window: &WindowState) -> Res {
-        log::debug!("configuring window {} from state", window.window);
+        log::trace!("configuring window {} from state", window.window);
         self.conn
             .configure_window(
                 window.frame_window,
@@ -339,14 +350,16 @@ impl<'a, C: Connection> ConnectionHandler<'a, C> {
     }
 
     pub fn set_focus_to_root(&self) -> Result<(), ReplyOrIdError> {
-        log::debug!("setting focus to root");
+        log::trace!("setting focus to root");
         self.conn
             .set_input_focus(InputFocus::NONE, 1 as u32, CURRENT_TIME)?;
+
+        self.change_window_prop(self.screen.root, "_NET_ACTIVE_WINDOW", &[1])?;
         Ok(())
     }
 
     pub fn create_bar_window(&self) -> Res {
-        log::debug!("creating bar: {}", self.bar.window);
+        log::trace!("creating bar: {}", self.bar.window);
         self.conn.create_window(
             COPY_DEPTH_FROM_PARENT,
             self.bar.window,
@@ -360,12 +373,12 @@ impl<'a, C: Connection> ConnectionHandler<'a, C> {
             0,
             &CreateWindowAux::new().background_pixel(self.graphics.0),
         )?;
-        self.create_frame_of_window(&self.bar)?;
+        self.add_window(&self.bar)?;
         Ok(())
     }
 
     pub fn kill_focus(&self, focus: u32) -> Res {
-        log::debug!("killing focus window {focus}");
+        log::trace!("killing focus window {focus}");
         self.conn.send_event(
             false,
             focus,
@@ -381,12 +394,14 @@ impl<'a, C: Connection> ConnectionHandler<'a, C> {
     }
 
     pub fn draw_bar(&self, wm_state: &StateHandler, active_window: Option<Window>) -> Res {
-        let bar_text = match active_window {
+        let bar_text: String = match active_window {
             Some(w) => self.get_window_name(w)?,
             None => "".to_owned(),
-        };
-
-        log::debug!("drawing bar with text: {bar_text}");
+        }
+        .chars()
+        .take(50)
+        .collect();
+        log::trace!("drawing bar with text: {bar_text}");
 
         self.conn.clear_area(
             false,
@@ -484,7 +499,7 @@ impl<'a, C: Connection> ConnectionHandler<'a, C> {
 
     pub fn draw_status_bar(&self) -> Res {
         let status_text = self.get_window_name(self.screen.root)?;
-        log::debug!("drawing root windows name on bar with text: {status_text}");
+        log::trace!("drawing root windows name on bar with text: {status_text}");
         self.conn
             .clear_area(
                 false,
@@ -508,12 +523,12 @@ impl<'a, C: Connection> ConnectionHandler<'a, C> {
     }
 
     pub fn set_fullscreen(&self, window: &WindowState) -> Res {
-        log::debug!("setting window to fullscreen {}", window.window);
+        log::trace!("setting window to fullscreen {}", window.window);
         self.config_window_from_state(window)?;
         self.change_atom_prop(
             window.window,
             "_NET_WM_STATE",
-            &self.atoms["_NET_WM_STATE_FULLSCREEN"].to_ne_bytes(),
+            &[self.atoms["_NET_WM_STATE_FULLSCREEN"]],
         )?;
         self.conn.configure_window(
             window.frame_window,
@@ -530,7 +545,7 @@ impl<'a, C: Connection> ConnectionHandler<'a, C> {
     }
 
     fn get_window_name(&self, window: Window) -> Result<String, ReplyOrIdError> {
-        log::debug!("getting window name of {window}");
+        log::trace!("getting window name of {window}");
 
         let result = String::from_utf8(
             self.conn
@@ -585,33 +600,64 @@ impl<'a, C: Connection> ConnectionHandler<'a, C> {
         Ok(())
     }
 
-    fn change_atom_prop(&self, window: Window, property: &str, data: &[u8]) -> Res {
+    fn change_atom_prop(&self, window: Window, property: &str, data: &[u32]) -> Res {
         self.conn
-            .change_property(
+            .change_property32(
                 PropMode::REPLACE,
                 window,
                 self.atoms[property],
                 AtomEnum::ATOM,
-                32,
-                data.len() as u32 / 4,
                 data,
             )?
             .check()?;
         Ok(())
     }
 
+    fn change_window_prop(&self, window: Window, property: &str, data: &[u32]) -> Res {
+        self.conn.change_property32(
+            PropMode::REPLACE,
+            window,
+            self.atoms[property],
+            AtomEnum::WINDOW,
+            data,
+        )?;
+        Ok(())
+    }
+
+    fn change_cardinal_prop(&self, window: Window, property: &str, data: &[u32]) -> Res {
+        self.conn.change_property32(
+            PropMode::REPLACE,
+            window,
+            self.atoms[property],
+            AtomEnum::CARDINAL,
+            data,
+        )?;
+        Ok(())
+    }
+
     pub fn remove_atom_prop(&self, window: Window, property: &str) -> Res {
-        self.conn
-            .change_property(
-                PropMode::REPLACE,
-                window,
-                self.atoms[property],
-                AtomEnum::ATOM,
-                32,
-                1,
-                &[0, 0, 0, 0],
-            )?
-            .check()?;
+        self.change_atom_prop(window, property, &[0])?;
+        Ok(())
+    }
+
+    pub fn update_client_list(&self, state: &StateHandler) -> Res {
+        let ids: Vec<u32> = state.tags[state.active_tag]
+            .windows
+            .iter()
+            .map(|w| w.window)
+            .collect();
+
+        self.change_window_prop(self.screen.root, "_NET_CLIENT_LIST", &ids)?;
+        Ok(())
+    }
+
+    pub fn update_active_desktop(&self, tag: u32) -> Res {
+        self.change_window_prop(self.screen.root, "_NET_CURRENT_DESKTOP", &[tag])?;
+        Ok(())
+    }
+
+    pub fn update_window_desktop(&self, window: Window, tag: u32) -> Res {
+        self.change_window_prop(window, "_NET_WM_DESKTOP", &[tag])?;
         Ok(())
     }
 
@@ -634,31 +680,13 @@ impl<'a, C: Connection> ConnectionHandler<'a, C> {
             &CreateWindowAux::new(),
         )?;
 
-        self.conn.change_property(
-            PropMode::REPLACE,
-            self.screen.root,
-            self.atoms[support_atom],
-            AtomEnum::WINDOW,
-            32,
-            1,
-            &proof_window_id.to_ne_bytes(),
-        )?;
-        self.conn.change_property(
-            PropMode::REPLACE,
-            proof_window_id,
-            self.atoms[support_atom],
-            AtomEnum::WINDOW,
-            32,
-            1,
-            &proof_window_id.to_ne_bytes(),
-        )?;
-        self.conn.change_property(
+        self.change_window_prop(self.screen.root, support_atom, &[proof_window_id])?;
+        self.change_window_prop(proof_window_id, support_atom, &[proof_window_id])?;
+        self.conn.change_property8(
             PropMode::REPLACE,
             proof_window_id,
             self.atoms[name_atom],
             AtomEnum::STRING,
-            8,
-            "hematite".len() as u32,
             "hematite".as_bytes(),
         )?;
         Ok(())
@@ -668,7 +696,7 @@ impl<'a, C: Connection> ConnectionHandler<'a, C> {
         handler.hotkeys.iter().try_for_each(|h| {
             self.conn
                 .grab_key(
-                    false,
+                    true,
                     self.screen.root,
                     h.modifier,
                     h.code,
@@ -717,7 +745,7 @@ fn become_window_manager<C: Connection>(conn: &C, root: u32) -> Res {
         EventMask::SUBSTRUCTURE_REDIRECT
             | EventMask::SUBSTRUCTURE_NOTIFY
             | EventMask::KEY_PRESS
-            | EventMask::PROPERTY_CHANGE,
+            | EventMask::PROPERTY_CHANGE
     );
     let result = conn.change_window_attributes(root, &change)?.check();
 
