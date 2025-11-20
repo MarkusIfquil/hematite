@@ -1,7 +1,11 @@
 use std::collections::HashMap;
+use std::fs;
 use std::process::Command;
 use std::process::exit;
 
+use fontdue::Font;
+
+use fontdue::Metrics;
 use x11rb::protocol::xproto::ConnectionExt;
 use x11rb::wrapper::ConnectionExt as OtherConnectionExt;
 use x11rb::{
@@ -13,13 +17,14 @@ use x11rb::{
     resource_manager,
 };
 
-use crate::{
-    config::{self, Config},
-    keys::KeyHandler,
-    state::*,
-};
+use crate::{config::Config, keys::KeyHandler, state::*};
 
 pub type Res = Result<(), ReplyOrIdError>;
+
+struct Colors {
+    main_color: (u8, u8, u8),
+    secondary_color: (u8, u8, u8),
+}
 
 pub struct ConnectionHandler<'a, C: Connection> {
     pub conn: &'a C,
@@ -27,12 +32,14 @@ pub struct ConnectionHandler<'a, C: Connection> {
     screen_num: usize,
     pub id_graphics_context: Gcontext,
     id_inverted_graphics_context: Gcontext,
-    pub graphics: (u32, u32, u32),
-    pub font_ascent: i16,
-    font_width: i16,
+    pub graphics: (u32, u32),
+    pub font: Font,
+    font_metrics: Metrics,
     pub atoms: HashMap<String, u32>,
     pub config: Config,
     pub bar: WindowState,
+    bar_pixmap: u32,
+    colors: Colors,
 }
 
 impl<'a, C: Connection> ConnectionHandler<'a, C> {
@@ -44,7 +51,6 @@ impl<'a, C: Connection> ConnectionHandler<'a, C> {
 
         let id_graphics_context = conn.generate_id()?;
         let id_inverted_graphics_context = conn.generate_id()?;
-        let id_font = conn.generate_id()?;
 
         let atom_strings = vec![
             "_NET_SUPPORTED",
@@ -85,33 +91,23 @@ impl<'a, C: Connection> ConnectionHandler<'a, C> {
         let graphics_context = CreateGCAux::new()
             .graphics_exposures(0)
             .background(main_color)
-            .foreground(secondary_color)
-            .font(id_font);
+            .foreground(secondary_color);
 
         let inverted_graphics_context = CreateGCAux::new()
             .graphics_exposures(0)
             .background(secondary_color)
-            .foreground(main_color)
-            .font(id_font);
+            .foreground(main_color);
 
-        set_font(conn, id_font, config)?;
+        let font = match get_font_file(&config.font) {
+            Ok(f) => f,
+            Err(e) => {
+                log::error!("couldnt open font! {e}");
+                exit(0);
+            }
+        };
 
-        conn.create_gc(id_graphics_context, screen.root, &graphics_context)?;
-        conn.create_gc(
-            id_inverted_graphics_context,
-            screen.root,
-            &inverted_graphics_context,
-        )?;
-
-        //get font parameters
-        let f = conn.query_font(id_font)?.reply()?.max_bounds;
-        log::trace!(
-            "got font parameters ascent {} descent {} width {}",
-            f.ascent,
-            f.descent,
-            f.character_width
-        );
-        conn.close_font(id_font)?;
+        let metrics = font.metrics('a', config.font_size as f32);
+        let pixmap_id = conn.generate_id()?;
 
         let handler = ConnectionHandler {
             conn,
@@ -119,9 +115,9 @@ impl<'a, C: Connection> ConnectionHandler<'a, C> {
             screen_num,
             id_graphics_context,
             id_inverted_graphics_context,
-            graphics: (main_color, secondary_color, id_font),
-            font_ascent: f.ascent,
-            font_width: f.character_width as i16,
+            graphics: (main_color, secondary_color),
+            font,
+            font_metrics: metrics,
             atoms,
             config: config.clone(),
             bar: WindowState {
@@ -130,15 +126,44 @@ impl<'a, C: Connection> ConnectionHandler<'a, C> {
                 x: 0,
                 y: 0,
                 width: screen.width_in_pixels,
-                height: f.ascent as u16 * 3 / 2,
+                height: metrics.height as u16 * 3 / 2,
                 group: WindowGroup::Floating,
             },
+            bar_pixmap: pixmap_id,
+            colors: Colors {
+                main_color: (
+                    (config.main_color.0 / 257) as u8,
+                    (config.main_color.1 / 257) as u8,
+                    (config.main_color.2 / 257) as u8,
+                ),
+                secondary_color: (
+                    (config.secondary_color.0 / 257) as u8,
+                    (config.secondary_color.1 / 257) as u8,
+                    (config.secondary_color.2 / 257) as u8,
+                ),
+            },
         };
+
+        handler.create_bar_window()?;
+        conn.create_pixmap(
+            screen.root_depth,
+            pixmap_id,
+            handler.bar.window,
+            handler.bar.width,
+            handler.bar.height,
+        )?
+        .check()?;
+
+        conn.create_gc(id_graphics_context, screen.root, &graphics_context)?;
+        conn.create_gc(
+            id_inverted_graphics_context,
+            screen.root,
+            &inverted_graphics_context,
+        )?;
 
         handler.add_heartbeat_window()?;
         handler.grab_keys(&KeyHandler::new(conn, &config)?)?;
         handler.set_cursor()?;
-        handler.create_bar_window()?;
 
         handler.change_atom_prop(screen.root, "_NET_SUPPORTED", &atom_nums)?;
         handler.change_cardinal_prop(screen.root, "_NET_NUMBER_OF_DESKTOPS", &[9])?;
@@ -187,7 +212,7 @@ impl<'a, C: Connection> ConnectionHandler<'a, C> {
 
     pub fn handle_config(&self, event: ConfigureRequestEvent) -> Res {
         log::trace!(
-            "EVENT CONFIG w {} x {} y {} w {} h {}",
+            "EVENT CONFIG w {} x {} y {} w {} self.bar.height {}",
             event.window,
             event.x,
             event.y,
@@ -217,8 +242,7 @@ impl<'a, C: Connection> ConnectionHandler<'a, C> {
                     EventMask::KEY_PRESS
                         | EventMask::SUBSTRUCTURE_NOTIFY
                         | EventMask::ENTER_WINDOW
-                        | EventMask::PROPERTY_CHANGE
-                        | EventMask::RESIZE_REDIRECT
+                        | EventMask::PROPERTY_CHANGE,
                 )
                 .background_pixel(self.graphics.0)
                 .border_pixel(self.graphics.1),
@@ -230,15 +254,11 @@ impl<'a, C: Connection> ConnectionHandler<'a, C> {
                 EventMask::KEY_PRESS
                     | EventMask::SUBSTRUCTURE_NOTIFY
                     | EventMask::ENTER_WINDOW
-                    | EventMask::PROPERTY_CHANGE
-                    | EventMask::RESIZE_REDIRECT,
+                    | EventMask::PROPERTY_CHANGE,
             ),
         )?;
 
-        let allowed_actions = [
-            "_NET_WM_ACTION_FULLSCREEN",
-        ]
-        .map(|a| self.atoms[a]);
+        let allowed_actions = ["_NET_WM_ACTION_FULLSCREEN"].map(|a| self.atoms[a]);
 
         self.change_atom_prop(window.window, "_NET_WM_ALLOWED_ACTIONS", &allowed_actions)?;
 
@@ -367,7 +387,7 @@ impl<'a, C: Connection> ConnectionHandler<'a, C> {
             0,
             0,
             self.screen.width_in_pixels,
-            self.font_ascent as u16 * 3 / 2,
+            self.font_metrics.height as u16 * 3 / 2,
             0,
             WindowClass::INPUT_OUTPUT,
             0,
@@ -393,7 +413,7 @@ impl<'a, C: Connection> ConnectionHandler<'a, C> {
         Ok(())
     }
 
-    pub fn draw_bar(&self, wm_state: &StateHandler, active_window: Option<Window>) -> Res {
+    pub fn draw_bar(&self, state: &StateHandler, active_window: Option<Window>) -> Res {
         let bar_text: String = match active_window {
             Some(w) => self.get_window_name(w)?,
             None => "".to_owned(),
@@ -403,96 +423,170 @@ impl<'a, C: Connection> ConnectionHandler<'a, C> {
         .collect();
         log::trace!("drawing bar with text: {bar_text}");
 
-        self.conn.clear_area(
-            false,
-            self.bar.window,
-            self.bar.x,
-            self.bar.y,
-            self.bar.width / 2,
-            self.bar.height,
-        )?;
+        let base_x = self.bar.height as i16 * 9 + self.bar.height as i16 / 2;
+        let base_y = (self.bar.height as i16 / 2) + self.font_metrics.height as i16 / 5 * 2;
 
-        let h = self.font_ascent as u16 * 3 / 2;
+        self.conn
+            .poly_fill_rectangle(
+                self.bar_pixmap,
+                self.id_inverted_graphics_context,
+                &[Rectangle {
+                    x: 0,
+                    y: 0,
+                    width: self.bar.width,
+                    height: self.bar.height,
+                }],
+            )?
+            .check()?;
+        self.draw_rectangles(state)?;
+        self.draw_tag_letters(state, base_y)?;
+        self.draw_text(&bar_text, base_x, base_y)?;
+        self.draw_status_bar()?;
+        self.clear_and_copy_bar()?;
+        Ok(())
+    }
 
-        //draw regular tag rect
-        self.conn.poly_fill_rectangle(
-            self.bar.window,
-            self.id_inverted_graphics_context,
-            &(1..=9)
-                .filter(|x| *x != wm_state.active_tag + 1)
-                .map(|x| self.create_tag_rectangle(h, x))
-                .collect::<Vec<_>>(),
-        )?;
+    fn clear_and_copy_bar(&self) -> Res {
+        self.conn
+            .clear_area(
+                false,
+                self.bar.window,
+                self.bar.x,
+                self.bar.y,
+                self.bar.width,
+                self.bar.height,
+            )?
+            .check()?;
+        self.conn
+            .copy_area(
+                self.bar_pixmap,
+                self.bar.window,
+                self.id_graphics_context,
+                0,
+                0,
+                0,
+                0,
+                self.bar.width,
+                self.bar.height,
+            )?
+            .check()?;
+        Ok(())
+    }
 
+    fn draw_rectangles(&self, state: &StateHandler) -> Res {
         //draw indicator that windows are active in tag
         self.conn.poly_fill_rectangle(
-            self.bar.window,
+            self.bar_pixmap,
             self.id_graphics_context,
             &(1..=9)
-                .filter(|x| {
-                    *x != wm_state.active_tag + 1 && !wm_state.tags[x - 1].windows.is_empty()
-                })
+                .filter(|x| *x != state.active_tag + 1 && !state.tags[x - 1].windows.is_empty())
                 .map(|x| Rectangle {
-                    x: h as i16 * (x as i16 - 1) + h as i16 / 9,
-                    y: h as i16 / 9,
-                    width: h / 7,
-                    height: h / 7,
+                    x: self.bar.height as i16 * (x as i16 - 1) + self.bar.height as i16 / 9,
+                    y: self.bar.height as i16 / 9,
+                    width: self.bar.height / 7,
+                    height: self.bar.height / 7,
                 })
                 .collect::<Vec<Rectangle>>(),
         )?;
 
         //draw active tag rect
         self.conn.poly_fill_rectangle(
-            self.bar.window,
+            self.bar_pixmap,
             self.id_graphics_context,
-            &[self.create_tag_rectangle(h, wm_state.active_tag + 1)],
+            &[self.create_tag_rectangle(state.active_tag + 1)],
         )?;
 
-        if !wm_state.tags[wm_state.active_tag].windows.is_empty() {
+        //draw active tag indicator
+        if !state.tags[state.active_tag].windows.is_empty() {
             self.conn.poly_fill_rectangle(
-                self.bar.window,
+                self.bar_pixmap,
                 self.id_inverted_graphics_context,
                 &[Rectangle {
-                    x: h as i16 * (wm_state.active_tag as i16) + h as i16 / 9,
-                    y: h as i16 / 9,
-                    width: h / 7,
-                    height: h / 7,
+                    x: self.bar.height as i16 * (state.active_tag as i16)
+                        + self.bar.height as i16 / 9,
+                    y: self.bar.height as i16 / 9,
+                    width: self.bar.height / 7,
+                    height: self.bar.height / 7,
                 }],
             )?;
         }
+        Ok(())
+    }
 
-        let text_y = (h as i16 / 2) + self.font_ascent / 5 * 2;
-        //draw regular text
+    fn draw_tag_letters(&self, state: &StateHandler, base_y: i16) -> Res {
         (1..=9).try_for_each(|x| {
-            let text = x.to_string();
-            if x == wm_state.active_tag + 1 {
-                self.conn.image_text8(
-                    self.bar.window,
-                    self.id_inverted_graphics_context,
-                    (h * (x as u16 - 1) + (h / 2 - (self.font_width as u16 / 2))) as i16,
-                    text_y,
-                    text.as_bytes(),
-                )?;
+            let base_x = self.bar.height * (x as u16 - 1)
+                + (self.bar.height / 2 - (self.font_metrics.width as u16 / 2));
+            if x == state.active_tag + 1 {
+                let (metrics, data) = self.rasterize_letter(
+                    char::from_digit(x as u32, 10).unwrap_or_default(),
+                    self.colors.main_color,
+                    self.colors.secondary_color,
+                );
+                self.draw_letter(metrics, data.as_slice(), base_x as i16, base_y)?;
             } else {
-                self.conn.image_text8(
-                    self.bar.window,
-                    self.id_graphics_context,
-                    (h * (x as u16 - 1) + (h / 2 - (self.font_width as u16 / 2))) as i16,
-                    text_y,
-                    text.as_bytes(),
-                )?;
+                let (metrics, data) = self.rasterize_letter(
+                    char::from_digit(x as u32, 10).unwrap_or_default(),
+                    self.colors.secondary_color,
+                    self.colors.main_color,
+                );
+                self.draw_letter(metrics, data.as_slice(), base_x as i16, base_y)?;
             }
             Ok::<(), ReplyOrIdError>(())
         })?;
+        Ok(())
+    }
 
-        //draw window name text
-        self.conn.image_text8(
-            self.bar.window,
-            self.id_graphics_context,
-            h as i16 * 9 + h as i16 / 2,
-            text_y,
-            bar_text.as_bytes(),
-        )?;
+    fn draw_text(&self, text: &str, base_x: i16, base_y: i16) -> Res {
+        let mut total_width = 0;
+        text.chars().try_for_each(|c| {
+            let (metrics, data) =
+                self.rasterize_letter(c, self.colors.secondary_color, self.colors.main_color);
+            self.draw_letter(metrics, data.as_slice(), base_x + total_width, base_y)?;
+            total_width += metrics.advance_width as i16;
+            Ok::<(), ReplyOrIdError>(())
+        })?;
+        Ok(())
+    }
+
+    fn rasterize_letter(
+        &self,
+        c: char,
+        color1: (u8, u8, u8),
+        color2: (u8, u8, u8),
+    ) -> (Metrics, Vec<u8>) {
+        let (metrics, bytes) = self.font.rasterize(c, self.font_metrics.height as f32);
+        let mut data: Vec<u8> = vec![0u8; metrics.width * metrics.height as usize * 4];
+        bytes.iter().enumerate().for_each(|(i, &a)| {
+            let j = i * 4;
+            data[j] = alpha_interpolate(color1.2, color2.2, a);
+            data[j + 1] = alpha_interpolate(color1.1, color2.1, a);
+            data[j + 2] = alpha_interpolate(color1.0, color2.0, a);
+            data[j + 3] = 0xFF;
+        });
+        (metrics, data)
+    }
+
+    fn draw_letter(&self, metrics: Metrics, data: &[u8], base_x: i16, base_y: i16) -> Res {
+        match self
+            .conn
+            .put_image(
+                ImageFormat::Z_PIXMAP,
+                self.bar_pixmap,
+                self.id_graphics_context,
+                metrics.width as u16,
+                metrics.height as u16,
+                base_x + metrics.xmin as i16,
+                base_y - metrics.height as i16 - metrics.ymin as i16,
+                0,
+                self.screen.root_depth,
+                data,
+            )?
+            .check()
+        {
+            Err(e) => log::error!("error putting image! {e}"),
+            Ok(_) => {}
+        };
 
         Ok(())
     }
@@ -500,25 +594,15 @@ impl<'a, C: Connection> ConnectionHandler<'a, C> {
     pub fn draw_status_bar(&self) -> Res {
         let status_text = self.get_window_name(self.screen.root)?;
         log::trace!("drawing root windows name on bar with text: {status_text}");
-        self.conn
-            .clear_area(
-                false,
-                self.bar.window,
-                self.bar.width as i16 - (status_text.len() + 5) as i16 * self.font_width,
-                self.bar.y,
-                self.bar.width,
-                self.bar.height,
-            )?
-            .check()?;
-        self.conn
-            .image_text8(
-                self.bar.window,
-                self.id_graphics_context,
-                self.bar.width as i16 - status_text.len() as i16 * self.font_width,
-                (self.bar.height as i16 / 2) + self.font_ascent / 3,
-                status_text.as_bytes(),
-            )?
-            .check()?;
+        let length = status_text.chars().fold(0, |acc, c| {
+            let metrics = self.font.metrics(c, self.font_metrics.height as f32);
+            acc + metrics.advance_width as i16
+        });
+        self.draw_text(
+            &status_text,
+            self.bar.width as i16 - length,
+            (self.bar.height as i16 / 2) + self.font_metrics.height as i16 / 3,
+        )?;
         Ok(())
     }
 
@@ -576,12 +660,12 @@ impl<'a, C: Connection> ConnectionHandler<'a, C> {
         };
     }
 
-    fn create_tag_rectangle(&self, h: u16, x: usize) -> Rectangle {
+    fn create_tag_rectangle(&self, x: usize) -> Rectangle {
         Rectangle {
-            x: h as i16 * (x as i16 - 1),
+            x: self.bar.height as i16 * (x as i16 - 1),
             y: 0,
-            width: h,
-            height: h,
+            width: self.bar.height,
+            height: self.bar.height,
         }
     }
 
@@ -745,7 +829,7 @@ fn become_window_manager<C: Connection>(conn: &C, root: u32) -> Res {
         EventMask::SUBSTRUCTURE_REDIRECT
             | EventMask::SUBSTRUCTURE_NOTIFY
             | EventMask::KEY_PRESS
-            | EventMask::PROPERTY_CHANGE
+            | EventMask::PROPERTY_CHANGE,
     );
     let result = conn.change_window_attributes(root, &change)?.check();
 
@@ -772,15 +856,27 @@ fn get_color_id<C: Connection>(
         .pixel)
 }
 
-fn set_font<C: Connection>(conn: &C, id_font: u32, config: &Config) -> Res {
-    match conn.open_font(id_font, config.font.as_bytes())?.check() {
-        Ok(_) => {
-            log::info!("setting font to {}", config.font);
-        }
-        Err(_) => {
-            log::error!("bad font, using default");
-            conn.open_font(id_font, config::FONT.as_bytes())?.check()?
+fn get_font_file(path: &str) -> Result<Font, Box<dyn std::error::Error>> {
+    log::debug!("loading font from {path}");
+    let file = match fs::read(path) {
+        Ok(f) => f,
+        Err(e) => {
+            log::error!("couldnt open file! {e}");
+            return Err(Box::new(e));
         }
     };
-    Ok(())
+
+    let font = match Font::from_bytes(file, fontdue::FontSettings::default()) {
+        Ok(f) => f,
+        Err(e) => {
+            log::error!("couldn't make font! {e}");
+            return Err(e.into());
+        }
+    };
+
+    Ok(font)
+}
+
+fn alpha_interpolate(color1: u8, color2: u8, alpha: u8) -> u8 {
+    ((color1 as u32 * alpha as u32 + (255 - alpha as u32) * color2 as u32) / 255) as u8
 }

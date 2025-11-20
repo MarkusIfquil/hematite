@@ -257,7 +257,7 @@ impl StateHandler {
     }
 
     pub fn print_state(&self) {
-        log::debug!("Manager state:\n{}", self);
+        log::trace!("Manager state:\n{}", self);
     }
 
     fn get_index_of_window(&self, window: Window) -> Option<usize> {

@@ -25,6 +25,7 @@ pub struct Config {
     pub main_color: (u16, u16, u16),
     pub secondary_color: (u16, u16, u16),
     pub font: String,
+    pub font_size: u32,
     pub hotkeys: Vec<HotkeyConfig>,
 }
 
@@ -51,7 +52,8 @@ impl From<ConfigDeserialized> for Config {
             spacing: config.sizing.spacing.clamp(0, 1000),
             ratio: config.sizing.ratio.clamp(0.0, 1.0),
             border_size: config.sizing.border_size.clamp(0, 1000),
-            font: config.font.font,
+            font: config.font.name,
+            font_size: config.font.size,
             hotkeys: config.hotkeys,
         }
     }
@@ -80,7 +82,8 @@ struct Colors {
 
 #[derive(Debug, Serialize, Deserialize)]
 struct Font {
-    font: String,
+    name: String,
+    size: u32
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -271,7 +274,8 @@ impl ConfigDeserialized {
                 secondary_color: String::from("#74c7ec"),
             },
             font: Font {
-                font: FONT.to_owned(),
+                name: FONT.to_owned(),
+                size: 12
             },
             hotkeys,
         }

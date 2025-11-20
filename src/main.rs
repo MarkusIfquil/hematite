@@ -53,7 +53,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         if let Ok(_) = rx.try_recv() {
             match conn_handler
                 .draw_bar(&event_handler.man, event_handler.man.get_focus())
-                .and(conn_handler.draw_status_bar())
             {
                 Err(e) => log::error!("{}", e),
                 Ok(_) => {}
@@ -68,7 +67,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 Err(e) => log::error!("{}", e),
                 Ok(_) => (),
             };
-            event_as_option = conn.poll_for_event()?;
+            event_as_option = if let Ok(e) = conn.poll_for_event() {
+                e
+            } else {
+                None
+            };
         }
     }
 }
