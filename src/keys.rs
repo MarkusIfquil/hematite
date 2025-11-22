@@ -49,17 +49,14 @@ impl KeyHandler {
         //get sym-code pairings
         let sym_code: HashMap<Keysym, KeyCode> = (min..=max)
             .filter_map(|x| {
-                if let Some(s) = xkeysym::keysym(
+                xkeysym::keysym(
                     x.into(),
                     0,
                     min.into(),
                     mapping.keysyms_per_keycode,
                     mapping.keysyms.as_slice(),
-                ) {
-                    Some((s, KeyCode::new(x.into())))
-                } else {
-                    None
-                }
+                )
+                .map(|s| (s, KeyCode::new(x.into())))
             })
             .collect();
 
@@ -71,7 +68,7 @@ impl KeyHandler {
             .map(|c| {
                 let modi = c
                     .modifiers
-                    .split("|")
+                    .split('|')
                     .map(|m| match m {
                         "CONTROL" => KeyButMask::CONTROL,
                         "SHIFT" => KeyButMask::SHIFT,
@@ -90,13 +87,10 @@ impl KeyHandler {
                     "XK_Left" => Keysym::Left,
                     "XK_Right" => Keysym::Right,
                     c => {
-                        let ch = match c.chars().next() {
-                            Some(c) => c,
-                            None => {
-                                log::error!("BAD KEYSYM {c}");
-                                char::default()
-                            }
-                        };
+                        let ch = c.chars().next().unwrap_or_else(|| {
+                            log::error!("BAD KEYSYM {c}");
+                            char::default()
+                        });
                         Keysym::from_char(ch)
                     }
                 };
@@ -111,7 +105,7 @@ impl KeyHandler {
             })
             .collect();
 
-        Ok(KeyHandler {
+        Ok(Self {
             _sym_code: sym_code,
             hotkeys,
         })
@@ -124,10 +118,7 @@ impl KeyHandler {
     }
 
     pub fn get_action(&self, event: KeyPressEvent) -> Option<HotkeyAction> {
-        if let Some(h) = self.get_registered_hotkey(event.state, event.detail as u32) {
-            Some(h.action.clone())
-        } else {
-            None
-        }
+        self.get_registered_hotkey(event.state, u32::from(event.detail))
+            .map(|h| h.action.clone())
     }
 }

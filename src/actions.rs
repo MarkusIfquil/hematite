@@ -6,6 +6,7 @@ use std::process::exit;
 use fontdue::Font;
 
 use fontdue::Metrics;
+use x11rb::protocol::xproto::Atom;
 use x11rb::protocol::xproto::ConnectionExt;
 use x11rb::wrapper::ConnectionExt as OtherConnectionExt;
 use x11rb::{
@@ -13,13 +14,25 @@ use x11rb::{
     connection::Connection,
     cursor,
     errors::{ReplyError, ReplyOrIdError},
-    protocol::{ErrorKind, xproto::*},
+    protocol::{
+        ErrorKind,
+        xproto::{
+            AtomEnum, ChangeWindowAttributesAux, ClientMessageEvent, ConfigureRequestEvent,
+            ConfigureWindowAux, CreateGCAux, CreateWindowAux, EventMask, Gcontext, GrabMode,
+            ImageFormat, InputFocus, PropMode, Rectangle, Screen, SetMode, Window, WindowClass,
+        },
+    },
     resource_manager,
 };
 
-use crate::{config::Config, keys::KeyHandler, state::*};
+use crate::{
+    config::Config,
+    keys::KeyHandler,
+    state::{StateHandler, WindowGroup, WindowState},
+};
 
 pub type Res = Result<(), ReplyOrIdError>;
+pub type Id = u32;
 
 struct Colors {
     main_color: (u8, u8, u8),
@@ -82,21 +95,11 @@ impl<'a, C: Connection> ConnectionHandler<'a, C> {
             "WM_DELETE_WINDOW",
         ];
 
-        let atom_nums = get_atom_nums(conn, &atom_strings)?;
+        let atom_nums = get_atom_nums(conn, &atom_strings);
         let atoms = get_atom_mapping(&atom_strings, &atom_nums);
 
         let main_color = get_color_id(conn, screen, config.main_color)?;
         let secondary_color = get_color_id(conn, screen, config.secondary_color)?;
-
-        let graphics_context = CreateGCAux::new()
-            .graphics_exposures(0)
-            .background(main_color)
-            .foreground(secondary_color);
-
-        let inverted_graphics_context = CreateGCAux::new()
-            .graphics_exposures(0)
-            .background(secondary_color)
-            .foreground(main_color);
 
         let font = match get_font_file(&config.font) {
             Ok(f) => f,
@@ -151,42 +154,13 @@ impl<'a, C: Connection> ConnectionHandler<'a, C> {
             handler.bar.window,
             handler.bar.width,
             handler.bar.height,
-        )?
-        .check()?;
-
-        conn.create_gc(id_graphics_context, screen.root, &graphics_context)?;
-        conn.create_gc(
-            id_inverted_graphics_context,
-            screen.root,
-            &inverted_graphics_context,
         )?;
 
-        handler.add_heartbeat_window()?;
-        handler.grab_keys(&KeyHandler::new(conn, &config)?)?;
+        handler.create_gcs(main_color, secondary_color)?;
+
+        handler.grab_keys(&KeyHandler::new(conn, config)?)?;
         handler.set_cursor()?;
-
-        handler.change_atom_prop(screen.root, "_NET_SUPPORTED", &atom_nums)?;
-        handler.change_cardinal_prop(screen.root, "_NET_NUMBER_OF_DESKTOPS", &[9])?;
-        handler.change_cardinal_prop(
-            screen.root,
-            "_NET_DESKTOP_GEOMETRY",
-            &[
-                screen.width_in_pixels as u32,
-                screen.height_in_pixels as u32,
-            ],
-        )?;
-        handler.change_cardinal_prop(screen.root, "_NET_DESKTOP_VIEWPORT", &[0, 0])?;
-        handler.change_cardinal_prop(
-            screen.root,
-            "_NET_WORKAREA",
-            &[
-                0,
-                0,
-                screen.width_in_pixels as u32,
-                screen.height_in_pixels as u32 - handler.bar.height as u32,
-            ],
-        )?;
-
+        handler.setup_atoms(&atom_nums)?;
         Ok(handler)
     }
 
@@ -300,7 +274,7 @@ impl<'a, C: Connection> ConnectionHandler<'a, C> {
         Ok(())
     }
 
-    pub fn set_focus_window(&self, windows: &Vec<WindowState>, window: &WindowState) -> Res {
+    pub fn set_focus_window(&self, windows: &[WindowState], window: &WindowState) -> Res {
         log::trace!("setting focus to: {:?}", window.window);
         self.conn
             .set_input_focus(InputFocus::PARENT, window.window, CURRENT_TIME)?;
@@ -312,7 +286,7 @@ impl<'a, C: Connection> ConnectionHandler<'a, C> {
             }
             self.conn.configure_window(
                 w.frame_window,
-                &ConfigureWindowAux::new().border_width(self.config.border_size as u32),
+                &ConfigureWindowAux::new().border_width(self.config.border_size),
             )?;
             self.conn.change_window_attributes(
                 w.frame_window,
@@ -341,10 +315,10 @@ impl<'a, C: Connection> ConnectionHandler<'a, C> {
             .configure_window(
                 window.frame_window,
                 &ConfigureWindowAux {
-                    x: Some(window.x as i32),
-                    y: Some(window.y as i32),
-                    width: Some(window.width as u32),
-                    height: Some(window.height as u32),
+                    x: Some(i32::from(window.x)),
+                    y: Some(i32::from(window.y)),
+                    width: Some(u32::from(window.width)),
+                    height: Some(u32::from(window.height)),
                     border_width: None,
                     sibling: None,
                     stack_mode: None,
@@ -357,8 +331,8 @@ impl<'a, C: Connection> ConnectionHandler<'a, C> {
                 &ConfigureWindowAux {
                     x: Some(0),
                     y: Some(0),
-                    width: Some(window.width as u32),
-                    height: Some(window.height as u32),
+                    width: Some(u32::from(window.width)),
+                    height: Some(u32::from(window.height)),
                     border_width: None,
                     sibling: None,
                     stack_mode: None,
@@ -372,7 +346,7 @@ impl<'a, C: Connection> ConnectionHandler<'a, C> {
     pub fn set_focus_to_root(&self) -> Result<(), ReplyOrIdError> {
         log::trace!("setting focus to root");
         self.conn
-            .set_input_focus(InputFocus::NONE, 1 as u32, CURRENT_TIME)?;
+            .set_input_focus(InputFocus::NONE, 1_u32, CURRENT_TIME)?;
 
         self.change_window_prop(self.screen.root, "_NET_ACTIVE_WINDOW", &[1])?;
         Ok(())
@@ -416,7 +390,7 @@ impl<'a, C: Connection> ConnectionHandler<'a, C> {
     pub fn draw_bar(&self, state: &StateHandler, active_window: Option<Window>) -> Res {
         let bar_text: String = match active_window {
             Some(w) => self.get_window_name(w)?,
-            None => "".to_owned(),
+            None => String::new(),
         }
         .chars()
         .take(50)
@@ -443,6 +417,147 @@ impl<'a, C: Connection> ConnectionHandler<'a, C> {
         self.draw_text(&bar_text, base_x, base_y)?;
         self.draw_status_bar()?;
         self.clear_and_copy_bar()?;
+        Ok(())
+    }
+
+    pub fn draw_status_bar(&self) -> Res {
+        let status_text = self.get_window_name(self.screen.root)?;
+        log::trace!("drawing root windows name on bar with text: {status_text}");
+        let length = status_text.chars().fold(0, |acc, c| {
+            let metrics = self.font.metrics(c, self.font_metrics.height as f32);
+            acc + metrics.advance_width as i16
+        });
+        self.draw_text(
+            &status_text,
+            self.bar.width as i16 - length,
+            (self.bar.height as i16 / 2) + self.font_metrics.height as i16 / 3,
+        )?;
+        Ok(())
+    }
+
+    pub fn set_fullscreen(&self, window: &WindowState) -> Res {
+        log::trace!("setting window to fullscreen {}", window.window);
+        self.config_window_from_state(window)?;
+        self.change_atom_prop(
+            window.window,
+            "_NET_WM_STATE",
+            &[self.atoms["_NET_WM_STATE_FULLSCREEN"]],
+        )?;
+        self.conn.configure_window(
+            window.frame_window,
+            &ConfigureWindowAux::new().border_width(0),
+        )?;
+        Ok(())
+    }
+
+    pub fn get_atom_name(&self, atom: u32) -> Result<String, ReplyOrIdError> {
+        String::from_utf8(self.conn.get_atom_name(atom)?.reply()?.name)
+            .map_or_else(|_| Ok(String::new()), Ok)
+    }
+
+    pub fn remove_atom_prop(&self, window: Window, property: &str) -> Res {
+        self.change_atom_prop(window, property, &[0])?;
+        Ok(())
+    }
+
+    pub fn update_client_list(&self, state: &StateHandler) -> Res {
+        let ids: Vec<u32> = state.tags[state.active_tag]
+            .windows
+            .iter()
+            .map(|w| w.window)
+            .collect();
+
+        self.change_window_prop(self.screen.root, "_NET_CLIENT_LIST", &ids)?;
+        Ok(())
+    }
+
+    pub fn update_active_desktop(&self, tag: u32) -> Res {
+        self.change_window_prop(self.screen.root, "_NET_CURRENT_DESKTOP", &[tag])?;
+        Ok(())
+    }
+
+    pub fn update_window_desktop(&self, window: Window, tag: u32) -> Res {
+        self.change_window_prop(window, "_NET_WM_DESKTOP", &[tag])?;
+        Ok(())
+    }
+
+    fn get_window_name(&self, window: Window) -> Result<String, ReplyOrIdError> {
+        log::trace!("getting window name of {window}");
+
+        let result = String::from_utf8(
+            self.conn
+                .get_property(
+                    false,
+                    window,
+                    self.atoms["_NET_WM_NAME"],
+                    self.atoms["UTF8_STRING"],
+                    0,
+                    100,
+                )?
+                .reply()?
+                .value,
+        )
+        .unwrap_or_default();
+
+        if result.is_empty() {
+            let result = String::from_utf8(
+                self.conn
+                    .get_property(false, window, AtomEnum::WM_NAME, AtomEnum::STRING, 0, 100)?
+                    .reply()?
+                    .value,
+            )
+            .unwrap_or_default();
+            Ok(result)
+        } else {
+            Ok(result)
+        }
+    }
+
+    fn create_gcs(&self, main_color: Id, secondary_color: Id) -> Res {
+        self.conn.create_gc(
+            self.id_graphics_context,
+            self.screen.root,
+            &CreateGCAux::new()
+                .graphics_exposures(0)
+                .background(main_color)
+                .foreground(secondary_color),
+        )?;
+
+        self.conn.create_gc(
+            self.id_inverted_graphics_context,
+            self.screen.root,
+            &CreateGCAux::new()
+                .graphics_exposures(0)
+                .background(secondary_color)
+                .foreground(main_color),
+        )?;
+        Ok(())
+    }
+
+    fn setup_atoms(&self, atom_nums: &[Atom]) -> Res {
+        self.add_heartbeat_window()?;
+
+        self.change_atom_prop(self.screen.root, "_NET_SUPPORTED", atom_nums)?;
+        self.change_cardinal_prop(self.screen.root, "_NET_NUMBER_OF_DESKTOPS", &[9])?;
+        self.change_cardinal_prop(
+            self.screen.root,
+            "_NET_DESKTOP_GEOMETRY",
+            &[
+                u32::from(self.screen.width_in_pixels),
+                u32::from(self.screen.height_in_pixels),
+            ],
+        )?;
+        self.change_cardinal_prop(self.screen.root, "_NET_DESKTOP_VIEWPORT", &[0, 0])?;
+        self.change_cardinal_prop(
+            self.screen.root,
+            "_NET_WORKAREA",
+            &[
+                0,
+                0,
+                u32::from(self.screen.width_in_pixels),
+                u32::from(self.screen.height_in_pixels) - u32::from(self.bar.height),
+            ],
+        )?;
         Ok(())
     }
 
@@ -556,7 +671,7 @@ impl<'a, C: Connection> ConnectionHandler<'a, C> {
         color2: (u8, u8, u8),
     ) -> (Metrics, Vec<u8>) {
         let (metrics, bytes) = self.font.rasterize(c, self.font_metrics.height as f32);
-        let mut data: Vec<u8> = vec![0u8; metrics.width * metrics.height as usize * 4];
+        let mut data: Vec<u8> = vec![0u8; metrics.width * metrics.height * 4];
         bytes.iter().enumerate().for_each(|(i, &a)| {
             let j = i * 4;
             data[j] = alpha_interpolate(color1.2, color2.2, a);
@@ -568,7 +683,7 @@ impl<'a, C: Connection> ConnectionHandler<'a, C> {
     }
 
     fn draw_letter(&self, metrics: Metrics, data: &[u8], base_x: i16, base_y: i16) -> Res {
-        match self
+        if let Err(e) = self
             .conn
             .put_image(
                 ImageFormat::Z_PIXMAP,
@@ -584,80 +699,10 @@ impl<'a, C: Connection> ConnectionHandler<'a, C> {
             )?
             .check()
         {
-            Err(e) => log::error!("error putting image! {e}"),
-            Ok(_) => {}
-        };
-
-        Ok(())
-    }
-
-    pub fn draw_status_bar(&self) -> Res {
-        let status_text = self.get_window_name(self.screen.root)?;
-        log::trace!("drawing root windows name on bar with text: {status_text}");
-        let length = status_text.chars().fold(0, |acc, c| {
-            let metrics = self.font.metrics(c, self.font_metrics.height as f32);
-            acc + metrics.advance_width as i16
-        });
-        self.draw_text(
-            &status_text,
-            self.bar.width as i16 - length,
-            (self.bar.height as i16 / 2) + self.font_metrics.height as i16 / 3,
-        )?;
-        Ok(())
-    }
-
-    pub fn set_fullscreen(&self, window: &WindowState) -> Res {
-        log::trace!("setting window to fullscreen {}", window.window);
-        self.config_window_from_state(window)?;
-        self.change_atom_prop(
-            window.window,
-            "_NET_WM_STATE",
-            &[self.atoms["_NET_WM_STATE_FULLSCREEN"]],
-        )?;
-        self.conn.configure_window(
-            window.frame_window,
-            &ConfigureWindowAux::new().border_width(0),
-        )?;
-        Ok(())
-    }
-
-    pub fn get_atom_name(&self, atom: u32) -> Result<String, ReplyOrIdError> {
-        match String::from_utf8(self.conn.get_atom_name(atom)?.reply()?.name) {
-            Ok(s) => Ok(s),
-            Err(_) => Ok("".to_string()),
+            log::error!("error putting image! {e}");
         }
-    }
 
-    fn get_window_name(&self, window: Window) -> Result<String, ReplyOrIdError> {
-        log::trace!("getting window name of {window}");
-
-        let result = String::from_utf8(
-            self.conn
-                .get_property(
-                    false,
-                    window,
-                    self.atoms["_NET_WM_NAME"],
-                    self.atoms["UTF8_STRING"],
-                    0,
-                    100,
-                )?
-                .reply()?
-                .value,
-        )
-        .unwrap_or_default();
-
-        return if result.is_empty() {
-            let result = String::from_utf8(
-                self.conn
-                    .get_property(false, window, AtomEnum::WM_NAME, AtomEnum::STRING, 0, 100)?
-                    .reply()?
-                    .value,
-            )
-            .unwrap_or_default();
-            Ok(result)
-        } else {
-            Ok(result)
-        };
+        Ok(())
     }
 
     fn create_tag_rectangle(&self, x: usize) -> Rectangle {
@@ -719,32 +764,6 @@ impl<'a, C: Connection> ConnectionHandler<'a, C> {
         Ok(())
     }
 
-    pub fn remove_atom_prop(&self, window: Window, property: &str) -> Res {
-        self.change_atom_prop(window, property, &[0])?;
-        Ok(())
-    }
-
-    pub fn update_client_list(&self, state: &StateHandler) -> Res {
-        let ids: Vec<u32> = state.tags[state.active_tag]
-            .windows
-            .iter()
-            .map(|w| w.window)
-            .collect();
-
-        self.change_window_prop(self.screen.root, "_NET_CLIENT_LIST", &ids)?;
-        Ok(())
-    }
-
-    pub fn update_active_desktop(&self, tag: u32) -> Res {
-        self.change_window_prop(self.screen.root, "_NET_CURRENT_DESKTOP", &[tag])?;
-        Ok(())
-    }
-
-    pub fn update_window_desktop(&self, window: Window, tag: u32) -> Res {
-        self.change_window_prop(window, "_NET_WM_DESKTOP", &[tag])?;
-        Ok(())
-    }
-
     fn add_heartbeat_window(&self) -> Res {
         let support_atom = "_NET_SUPPORTING_WM_CHECK";
         let name_atom = "_NET_WM_NAME";
@@ -771,7 +790,7 @@ impl<'a, C: Connection> ConnectionHandler<'a, C> {
             proof_window_id,
             self.atoms[name_atom],
             AtomEnum::STRING,
-            "hematite".as_bytes(),
+            b"hematite",
         )?;
         Ok(())
     }
@@ -797,14 +816,14 @@ pub fn spawn_command(command: &str) {
     match Command::new("sh").arg("-c").arg(command).spawn() {
         Ok(_) => (),
         Err(e) => log::error!("error when spawning command {e:?}"),
-    };
+    }
 }
 
 fn get_atom_mapping(atom_strings: &[&str], atom_nums: &[u32]) -> HashMap<String, u32> {
     let mut atoms: HashMap<String, u32> = HashMap::new();
     atom_strings
         .iter()
-        .map(|s| s.to_string())
+        .map(std::string::ToString::to_string)
         .zip(atom_nums)
         .for_each(|(k, v)| {
             atoms.insert(k, *v);
@@ -812,16 +831,13 @@ fn get_atom_mapping(atom_strings: &[&str], atom_nums: &[u32]) -> HashMap<String,
     atoms
 }
 
-fn get_atom_nums<C: Connection>(
-    conn: &C,
-    atom_strings: &[&str],
-) -> Result<Vec<u32>, ReplyOrIdError> {
-    Ok(atom_strings
+fn get_atom_nums<C: Connection>(conn: &C, atom_strings: &[&str]) -> std::vec::Vec<u32> {
+    atom_strings
         .iter()
         .flat_map(|s| -> Result<u32, ReplyOrIdError> {
             Ok(conn.intern_atom(false, s.as_bytes())?.reply()?.atom)
         })
-        .collect())
+        .collect()
 }
 
 fn become_window_manager<C: Connection>(conn: &C, root: u32) -> Res {
@@ -837,7 +853,6 @@ fn become_window_manager<C: Connection>(conn: &C, root: u32) -> Res {
         if error.error_kind == ErrorKind::Access {
             log::error!("another wm is running");
             exit(1);
-        } else {
         }
     } else {
         log::info!("became window manager successfully");
@@ -878,5 +893,6 @@ fn get_font_file(path: &str) -> Result<Font, Box<dyn std::error::Error>> {
 }
 
 fn alpha_interpolate(color1: u8, color2: u8, alpha: u8) -> u8 {
-    ((color1 as u32 * alpha as u32 + (255 - alpha as u32) * color2 as u32) / 255) as u8
+    ((u32::from(color1) * u32::from(alpha) + (255 - u32::from(alpha)) * u32::from(color2)) / 255)
+        as u8
 }

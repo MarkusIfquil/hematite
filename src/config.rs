@@ -7,7 +7,7 @@ pub const RATIO: f32 = 0.5;
 pub const BORDER_SIZE: u32 = 1;
 pub const MAIN_COLOR: (u16, u16, u16) = (4369, 4369, 6939); // #11111b
 pub const SECONDARY_COLOR: (u16, u16, u16) = (29812, 51143, 60652); // #74c7ec
-pub const FONT: &'static str = "fixed";
+pub const FONT: &str = "fixed";
 
 fn hex_color_to_rgb(hex: &str) -> Result<(u16, u16, u16), ParseIntError> {
     Ok((
@@ -31,20 +31,15 @@ pub struct Config {
 
 impl From<ConfigDeserialized> for Config {
     fn from(config: ConfigDeserialized) -> Self {
-        let main_color = match hex_color_to_rgb(&config.colors.main_color) {
-            Ok(c) => c,
-            Err(_) => {
-                log::debug!("BAD COLOR VALUE");
-                MAIN_COLOR
-            }
-        };
-        let secondary_color = match hex_color_to_rgb(&config.colors.secondary_color) {
-            Ok(c) => c,
-            Err(_) => {
+        let main_color = hex_color_to_rgb(&config.colors.main_color).unwrap_or_else(|_| {
+            log::debug!("BAD COLOR VALUE");
+            MAIN_COLOR
+        });
+        let secondary_color =
+            hex_color_to_rgb(&config.colors.secondary_color).unwrap_or_else(|_| {
                 log::debug!("BAD COLOR VALUE");
                 SECONDARY_COLOR
-            }
-        };
+            });
 
         Self {
             main_color,
@@ -83,7 +78,7 @@ struct Colors {
 #[derive(Debug, Serialize, Deserialize)]
 struct Font {
     name: String,
-    size: u32
+    size: u32,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -104,23 +99,20 @@ impl ConfigDeserialized {
                 }
             };
 
-        log::info!("loading config from {path:?}");
+        log::info!("loading config from {}", path.display());
 
         let config_str = match std::fs::read_to_string(&path) {
             Ok(s) => s,
             Err(e) => {
                 log::info!("config not found {e:?}, serializing default");
 
-                let serialized = match toml::to_string(&Self::default()) {
-                    Ok(s) => s,
-                    Err(_) => {
-                        log::error!("couldn't serialize config into file, using default");
-                        return Self::default();
-                    }
+                let Ok(serialized) = toml::to_string(&Self::default()) else {
+                    log::error!("couldn't serialize config into file, using default");
+                    return Self::default();
                 };
 
                 match std::fs::write(&path, serialized) {
-                    Ok(_) => log::info!("created default config at {path:?}"),
+                    Ok(()) => log::info!("created default config at {}", path.display()),
                     Err(_) => {
                         log::error!("couldn't write to file, using default");
                     }
@@ -129,7 +121,7 @@ impl ConfigDeserialized {
                 return Self::default();
             }
         };
-        
+
         match toml::from_str(&config_str) {
             Ok(d) => d,
             Err(e) => {
@@ -220,31 +212,30 @@ impl ConfigDeserialized {
             },
             //media
             HotkeyConfig {
-                modifiers: "".to_string(),
+                modifiers: String::new(),
                 key: "XF86_AudioRaiseVolume".to_string(),
-                action: HotkeyAction::Spawn("/usr/bin/pactl set-sink-volume 0 +5%".to_string())
+                action: HotkeyAction::Spawn("/usr/bin/pactl set-sink-volume 0 +5%".to_string()),
             },
             HotkeyConfig {
-                modifiers: "".to_string(),
+                modifiers: String::new(),
                 key: "XF86_AudioLowerVolume".to_string(),
-                action: HotkeyAction::Spawn("/usr/bin/pactl set-sink-volume 0 -5%".to_string())
+                action: HotkeyAction::Spawn("/usr/bin/pactl set-sink-volume 0 -5%".to_string()),
             },
             HotkeyConfig {
-                modifiers: "".to_string(),
+                modifiers: String::new(),
                 key: "XF86_AudioMute".to_string(),
-                action: HotkeyAction::Spawn("/usr/bin/pactl set-sink-mute 0 toggle".to_string())
+                action: HotkeyAction::Spawn("/usr/bin/pactl set-sink-mute 0 toggle".to_string()),
             },
             HotkeyConfig {
-                modifiers: "".to_string(),
+                modifiers: String::new(),
                 key: "XF86_MonBrightnessUp".to_string(),
-                action: HotkeyAction::Spawn("sudo light -A 5".to_string())
+                action: HotkeyAction::Spawn("sudo light -A 5".to_string()),
             },
             HotkeyConfig {
-                modifiers: "".to_string(),
+                modifiers: String::new(),
                 key: "XF86_MonBrightnessDown".to_string(),
-                action: HotkeyAction::Spawn("sudo light -U 5".to_string())
+                action: HotkeyAction::Spawn("sudo light -U 5".to_string()),
             },
-
         ];
         hotkeys.extend(
             // switch to tag
@@ -259,11 +250,10 @@ impl ConfigDeserialized {
                     modifiers: "MOD|SHIFT".to_string(),
                     key: x.to_string(),
                     action: HotkeyAction::MoveWindow(x),
-                }))
-                .collect::<Vec<_>>(),
+                })),
         );
 
-        ConfigDeserialized {
+        Self {
             sizing: Sizing {
                 spacing: SPACING,
                 ratio: RATIO,
@@ -275,7 +265,7 @@ impl ConfigDeserialized {
             },
             font: Font {
                 name: FONT.to_owned(),
-                size: 12
+                size: 12,
             },
             hotkeys,
         }

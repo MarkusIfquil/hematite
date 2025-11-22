@@ -1,4 +1,17 @@
 // Xephyr -br -ac -noreset -screen 800x600 :1
+#![warn(clippy::correctness)]
+#![warn(clippy::suspicious)]
+#![warn(clippy::complexity)]
+#![warn(clippy::perf)]
+// #![warn(clippy::nursery)]
+#![warn(clippy::style)]
+// #![warn(clippy::pedantic)]
+// #![warn(clippy::restriction)]
+#![allow(clippy::cast_sign_loss)]
+#![allow(clippy::cast_possible_truncation)]
+#![allow(clippy::cast_possible_wrap)]
+#![allow(clippy::cast_precision_loss)]
+#![allow(clippy::collapsible_if)]
 
 mod actions;
 mod config;
@@ -10,7 +23,7 @@ use crate::{
     config::{Config, ConfigDeserialized},
     events::EventHandler,
     keys::KeyHandler,
-    state::*,
+    state::{StateHandler, TilingInfo},
 };
 use std::{sync::mpsc, thread, time::Duration};
 use x11rb::{connection::Connection, errors::ReplyOrIdError};
@@ -24,7 +37,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let config = Config::from(ConfigDeserialized::new());
     let conn_handler = ConnectionHandler::new(&conn, screen_num, &config)?;
     let key_handler = KeyHandler::new(&conn, &config)?;
-    let manager = StateHandler::new(TilingInfo {
+    let state = StateHandler::new(TilingInfo {
         gap: config.spacing as u16,
         ratio: config.ratio,
         width: conn_handler.screen.width_in_pixels,
@@ -32,11 +45,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         bar_height: conn_handler.bar.height,
     });
 
-    conn_handler.draw_bar(&manager, None)?;
+    conn_handler.draw_bar(&state, None)?;
 
     let mut event_handler = EventHandler {
         conn: &conn_handler,
-        man: manager,
+        state,
         key: key_handler,
     };
 
@@ -50,12 +63,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     });
 
     loop {
-        if let Ok(_) = rx.try_recv() {
-            match conn_handler
-                .draw_bar(&event_handler.man, event_handler.man.get_focus())
+        if rx.try_recv().is_ok() {
+            if let Err(e) =
+                conn_handler.draw_bar(&event_handler.state, event_handler.state.get_focus())
             {
-                Err(e) => log::error!("{}", e),
-                Ok(_) => {}
+                log::error!("{e}");
             }
         }
         conn.flush()?;
@@ -63,15 +75,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let mut event_as_option = Some(event);
 
         while let Some(event) = event_as_option {
-            match event_handler.handle_event(event) {
-                Err(e) => log::error!("{}", e),
-                Ok(_) => (),
-            };
-            event_as_option = if let Ok(e) = conn.poll_for_event() {
-                e
-            } else {
-                None
-            };
+            if let Err(e) = event_handler.handle_event(&event) {
+                log::error!("{e}");
+            }
+            event_as_option = conn.poll_for_event().unwrap_or_default();
         }
     }
 }

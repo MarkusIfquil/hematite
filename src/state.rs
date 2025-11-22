@@ -1,6 +1,6 @@
 use core::fmt;
-use std::fmt::Debug;
-use x11rb::errors::ReplyOrIdError;
+use core::fmt::Debug;
+use std::fmt::Write;
 type Window = u32;
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub enum WindowGroup {
@@ -21,8 +21,8 @@ pub struct WindowState {
 }
 
 impl WindowState {
-    pub fn new(window: Window, frame_window: Window) -> Result<WindowState, ReplyOrIdError> {
-        Ok(WindowState {
+    pub fn new(window: Window, frame_window: Window) -> Self {
+        Self {
             window,
             frame_window,
             x: 0,
@@ -30,7 +30,7 @@ impl WindowState {
             width: 100,
             height: 100,
             group: WindowGroup::Stack,
-        })
+        }
     }
 }
 
@@ -45,14 +45,14 @@ impl fmt::Display for WindowState {
 }
 
 pub struct Tag {
-    tag: usize,
+    num: usize,
     pub focus: Option<u32>,
     pub windows: Vec<WindowState>,
 }
 impl Tag {
     fn new(tag: usize) -> Self {
-        Tag {
-            tag,
+        Self {
+            num: tag,
             focus: None,
             windows: Vec::new(),
         }
@@ -64,13 +64,12 @@ impl fmt::Display for Tag {
         write!(
             f,
             "tag {} | focus {:?} | windows:\n{}",
-            self.tag,
+            self.num,
             self.focus,
-            self.windows
-                .iter()
-                .map(|w| format!("{w}\n"))
-                .collect::<Vec<String>>()
-                .join("")
+            self.windows.iter().fold(String::new(), |mut acc, w| {
+                let _ = writeln!(acc, "{w}");
+                acc
+            })
         )
     }
 }
@@ -97,9 +96,10 @@ impl fmt::Display for StateHandler {
             self.tags
                 .iter()
                 .filter(|t| !t.windows.is_empty())
-                .map(|t| format!("{t}"))
-                .collect::<Vec<String>>()
-                .join(""),
+                .fold(String::new(), |mut acc, t| {
+                    let _ = write!(acc, "{t}");
+                    acc
+                }),
             self.active_tag
         )
     }
@@ -107,8 +107,8 @@ impl fmt::Display for StateHandler {
 
 impl StateHandler {
     pub fn new(tiling: TilingInfo) -> Self {
-        StateHandler {
-            tags: (0..=8).map(|n| Tag::new(n)).collect(),
+        Self {
+            tags: (0..=8).map(Tag::new).collect(),
             active_tag: 0,
             tiling,
         }
@@ -148,10 +148,8 @@ impl StateHandler {
 
     pub fn set_tag_focus_to_master(&mut self) {
         log::debug!("setting tag focus to master");
-        self.tags[self.active_tag].focus = match self.tags[self.active_tag].windows.last() {
-            Some(w) => Some(w.window),
-            None => None,
-        };
+        self.tags[self.active_tag].focus =
+            self.tags[self.active_tag].windows.last().map(|w| w.window);
     }
 
     pub fn set_last_master_others_stack(&mut self) {
@@ -163,16 +161,16 @@ impl StateHandler {
         if let Some(w) = self.get_mut_active_tag_windows().last_mut() {
             if w.group == WindowGroup::Floating {
                 return;
-            };
+            }
             w.group = WindowGroup::Master;
-        };
+        }
     }
 
     pub fn tile_windows(&mut self) {
         log::debug!("tiling tag {}", self.active_tag);
 
         let (gap, ratio) = (self.tiling.gap, self.tiling.ratio);
-        let (maxw, maxh) = (self.tiling.width, self.tiling.height);
+        let (max_width, max_height) = (self.tiling.width, self.tiling.height);
         let bar_height = self.tiling.bar_height;
 
         let stack_count = self.get_active_tag_windows().len().clamp(1, 100) - 1;
@@ -182,32 +180,32 @@ impl StateHandler {
             .enumerate()
             .for_each(|(i, w)| match w.group {
                 WindowGroup::Master => {
-                    w.x = 0 + gap as i16;
-                    w.y = 0 + gap as i16 + bar_height as i16;
+                    w.x = gap as i16;
+                    w.y = gap as i16 + bar_height as i16;
                     w.width = if stack_count == 0 {
-                        maxw - gap as u16 * 2
+                        max_width - gap * 2
                     } else {
-                        ((maxw as f32 * (1.0 - ratio)) - (gap as f32 * 2.0)) as u16
+                        f32::from(max_width).mul_add(1.0 - ratio, -(f32::from(gap) * 2.0)) as u16
                     };
-                    w.height = maxh - gap as u16 * 2 - bar_height;
+                    w.height = max_height - gap * 2 - bar_height;
                 }
                 WindowGroup::Stack => {
-                    w.x = (maxw as f32 * (1.0 - ratio)) as i16;
+                    w.x = (f32::from(max_width) * (1.0 - ratio)) as i16;
                     w.y = if i == 0 {
-                        (i * (maxh as usize / stack_count) + gap as usize) as i16
+                        (i * (max_height as usize / stack_count) + gap as usize) as i16
                             + bar_height as i16
                     } else {
-                        (i * (maxh as usize / stack_count)) as i16
+                        (i * (max_height as usize / stack_count)) as i16
                     };
-                    w.width = (maxw as f32 * ratio) as u16 - gap as u16;
+                    w.width = (f32::from(max_width) * ratio) as u16 - gap;
 
                     w.height = if i == 0 {
-                        (maxh as usize / stack_count) as u16 - gap as u16 * 2 - bar_height
+                        (max_height as usize / stack_count) as u16 - gap * 2 - bar_height
                     } else {
-                        (maxh as usize / stack_count) as u16 - gap as u16
+                        (max_height as usize / stack_count) as u16 - gap
                     };
                 }
-                _ => (),
+                WindowGroup::Floating => (),
             });
     }
 
@@ -217,47 +215,42 @@ impl StateHandler {
     }
 
     pub fn swap_master(&mut self) {
-        let focus_window = match self.tags[self.active_tag].focus {
-            Some(w) => w,
-            None => return,
+        let Some(focus_window) = self.tags[self.active_tag].focus else {
+            return;
         };
         let len = self.tags[self.active_tag].windows.len();
         let mut master = self.tags[self.active_tag].windows[len - 1].window;
         if master == focus_window && len > 1 {
             master = self.tags[self.active_tag].windows[len - 2].window;
         }
-        let index_f = match self.get_index_of_window(focus_window) {
-            Some(i) => i,
-            None => return,
+        let Some(index_f) = self.get_index_of_window(focus_window) else {
+            return;
         };
-        let index_m = match self.get_index_of_window(master) {
-            Some(i) => i,
-            None => return,
+        let Some(index_m) = self.get_index_of_window(master) else {
+            return;
         };
         self.tags[self.active_tag].windows.swap(index_f, index_m);
     }
 
     pub fn switch_focus_next(&mut self, change: i16) {
-        let focus_window = match self.tags[self.active_tag].focus {
-            Some(w) => w,
-            None => return,
+        let Some(focus_window) = self.tags[self.active_tag].focus else {
+            return;
         };
-        let focus_index = (match self
+        let Some(focus_index) = self
             .get_active_tag_windows()
             .iter()
             .position(|w| w.window == focus_window)
-        {
-            Some(i) => i,
-            None => return,
-        } as i16
-            + change)
-            .rem_euclid(self.get_active_tag_windows().len() as i16);
+        else {
+            return;
+        };
+        let focus_index = focus_index as i16 + change;
+        let focus_index = focus_index.rem_euclid(self.get_active_tag_windows().len() as i16);
         self.tags[self.active_tag].focus =
             Some(self.get_active_tag_windows()[focus_index as usize].window);
     }
 
     pub fn print_state(&self) {
-        log::trace!("Manager state:\n{}", self);
+        log::trace!("Manager state:\n{self}");
     }
 
     fn get_index_of_window(&self, window: Window) -> Option<usize> {

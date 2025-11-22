@@ -1,6 +1,12 @@
 use x11rb::{
     connection::Connection,
-    protocol::{Event, xproto::*},
+    protocol::{
+        Event,
+        xproto::{
+            ClientMessageEvent, ConfigureRequestEvent, EnterNotifyEvent, KeyPressEvent,
+            MapRequestEvent, UnmapNotifyEvent,
+        },
+    },
 };
 
 use crate::{
@@ -11,40 +17,40 @@ use crate::{
 
 pub struct EventHandler<'a, C: Connection> {
     pub conn: &'a ConnectionHandler<'a, C>,
-    pub man: StateHandler,
+    pub state: StateHandler,
     pub key: KeyHandler,
 }
 
-impl<'a, C: Connection> EventHandler<'a, C> {
-    pub fn handle_event(&mut self, event: Event) -> Res {
+impl<C: Connection> EventHandler<'_, C> {
+    pub fn handle_event(&mut self, event: &Event) -> Res {
         match event {
             Event::MapRequest(e) => {
-                self.handle_map_request(e)?;
+                self.handle_map_request(*e)?;
             }
             Event::UnmapNotify(e) => {
-                self.handle_unmap_notify(e)?;
+                self.handle_unmap_notify(*e)?;
             }
             Event::KeyPress(e) => {
-                self.handle_keypress(e)?;
+                self.handle_keypress(*e)?;
             }
             Event::EnterNotify(e) => {
-                self.handle_enter(e)?;
+                self.handle_enter(*e)?;
             }
             Event::ConfigureRequest(e) => {
-                self.handle_config(e)?;
+                self.handle_config(*e)?;
             }
             Event::ClientMessage(e) => {
-                self.handle_client_message(e)?;
+                self.handle_client_message(*e)?;
             }
             _ => (),
-        };
+        }
         Ok(())
     }
 
     fn handle_map_request(&mut self, event: MapRequestEvent) -> Res {
-        if let Some(_) = self.man.get_window_state(event.window) {
+        if self.state.get_window_state(event.window).is_some() {
             return Ok(());
-        };
+        }
 
         log::trace!(
             "EVENT MAP window {} parent {} response {}",
@@ -53,17 +59,16 @@ impl<'a, C: Connection> EventHandler<'a, C> {
             event.response_type
         );
 
-        let window = WindowState::new(event.window, self.conn.conn.generate_id()?)?;
+        let window = WindowState::new(event.window, self.conn.conn.generate_id()?);
 
         self.conn.add_window(&window)?;
-        self.man.add_window(window);
+        self.state.add_window(window);
         self.refresh()
     }
 
     fn handle_unmap_notify(&mut self, event: UnmapNotifyEvent) -> Res {
-        let window = match self.man.get_window_state(event.window) {
-            Some(w) => w,
-            None => return Ok(()),
+        let Some(window) = self.state.get_window_state(event.window) else {
+            return Ok(());
         };
         log::trace!(
             "EVENT UNMAP window {} event {} from config {} response {}",
@@ -74,19 +79,18 @@ impl<'a, C: Connection> EventHandler<'a, C> {
         );
 
         self.conn.destroy_window(window)?;
-        self.conn.update_client_list(&self.man)?;
+        self.conn.update_client_list(&self.state)?;
 
-        self.man
+        self.state
             .get_mut_active_tag_windows()
             .retain(|w| w.window != event.window);
-        self.man.set_tag_focus_to_master();
+        self.state.set_tag_focus_to_master();
         self.refresh()
     }
 
     fn handle_keypress(&mut self, event: KeyPressEvent) -> Res {
-        let action = match self.key.get_action(event) {
-            Some(a) => a,
-            None => return Ok(()),
+        let Some(action) = self.key.get_action(event) else {
+            return Ok(());
         };
 
         log::trace!(
@@ -107,27 +111,24 @@ impl<'a, C: Connection> EventHandler<'a, C> {
                 crate::actions::spawn_command(&command);
             }
             HotkeyAction::ExitFocusedWindow => {
-                let focus = match self.man.get_focus() {
-                    Some(f) => f,
-                    None => return Ok(()),
-                };
+                let Some(focus) = self.state.get_focus() else { return Ok(()) };
                 self.conn.kill_focus(focus)?;
             }
             HotkeyAction::ChangeRatio(change) => {
-                self.man.tiling.ratio = (self.man.tiling.ratio + change).clamp(0.15, 0.85);
+                self.state.tiling.ratio = (self.state.tiling.ratio + change).clamp(0.15, 0.85);
             }
             HotkeyAction::NextFocus(change) => {
-                self.man.switch_focus_next(change);
+                self.state.switch_focus_next(change);
             }
             HotkeyAction::NextTag(change) => {
                 self.change_active_tag(
-                    (self.man.active_tag as i16 + change).rem_euclid(9) as usize
+                    (self.state.active_tag as i16 + change).rem_euclid(9) as usize
                 )?;
             }
             HotkeyAction::SwapMaster => {
-                self.man.swap_master();
+                self.state.swap_master();
             }
-        };
+        }
         self.refresh()?;
         Ok(())
     }
@@ -140,21 +141,20 @@ impl<'a, C: Connection> EventHandler<'a, C> {
             event.event
         );
 
-        if let Some(w) = self.man.get_window_state(event.child) {
-            self.man.tags[self.man.active_tag].focus = Some(w.window);
-        };
-        if let Some(w) = self.man.get_window_state(event.event) {
-            self.man.tags[self.man.active_tag].focus = Some(w.window);
-        };
+        if let Some(w) = self.state.get_window_state(event.child) {
+            self.state.tags[self.state.active_tag].focus = Some(w.window);
+        }
+        if let Some(w) = self.state.get_window_state(event.event) {
+            self.state.tags[self.state.active_tag].focus = Some(w.window);
+        }
         self.refresh()?;
         Ok(())
     }
 
     fn handle_config(&self, event: ConfigureRequestEvent) -> Res {
-        match self.man.get_window_state(event.window) {
-            Some(_) => self.conn.handle_config(event)?,
-            None => (),
-        };
+        if self.state.get_window_state(event.window).is_some() {
+            self.conn.handle_config(event)?;
+        }
         Ok(())
     }
 
@@ -177,103 +177,92 @@ impl<'a, C: Connection> EventHandler<'a, C> {
             first_property
         );
 
-        match event_type.as_str() {
-            "_NET_WM_STATE" => match first_property.as_str() {
-                "_NET_WM_STATE_FULLSCREEN" => {
-                    let state = match self.man.get_mut_window_state(event.window) {
-                        Some(s) => s,
-                        None => return Ok(()),
-                    };
-                    let window = state.window;
-                    match data[0] {
-                        0 => {
-                            state.group = WindowGroup::Stack;
-                            self.conn.remove_atom_prop(window, "_NET_WM_STATE")?;
-                            self.refresh()?;
-                        }
-                        1 => {
-                            state.group = WindowGroup::Floating;
-                            state.x = 0;
-                            state.y = 0;
-                            state.width = self.conn.screen.width_in_pixels;
-                            state.height = self.conn.screen.height_in_pixels;
-                            self.conn.set_fullscreen(state)?;
-                            self.refresh()?;
-                        }
-                        2 => {}
-                        _ => {}
-                    };
+        if event_type.as_str() == "_NET_WM_STATE"
+            && first_property.as_str() == "_NET_WM_STATE_FULLSCREEN"
+        {
+            let Some(state) = self.state.get_mut_window_state(event.window) else { return Ok(()) };
+            let window = state.window;
+            match data[0] {
+                0 => {
+                    state.group = WindowGroup::Stack;
+                    self.conn.remove_atom_prop(window, "_NET_WM_STATE")?;
+                    self.refresh()?;
+                }
+                1 => {
+                    state.group = WindowGroup::Floating;
+                    state.x = 0;
+                    state.y = 0;
+                    state.width = self.conn.screen.width_in_pixels;
+                    state.height = self.conn.screen.height_in_pixels;
+                    self.conn.set_fullscreen(state)?;
+                    self.refresh()?;
                 }
                 _ => {}
-            },
-            _ => {}
-        };
+            }
+        }
 
         Ok(())
     }
 
     fn refresh(&mut self) -> Res {
         self.refresh_focus()?;
-        self.man.refresh();
+        self.state.refresh();
         self.config_tag()?;
-        self.conn.refresh(&self.man)?;
-        self.man.print_state();
+        self.conn.refresh(&self.state)?;
+        self.state.print_state();
         Ok(())
     }
 
     fn refresh_focus(&self) -> Res {
-        match self.man.tags[self.man.active_tag].focus {
+        match self.state.tags[self.state.active_tag].focus {
             Some(w) => {
-                let window = match self.man.get_window_state(w) {
-                    Some(w) => w,
-                    None => return Ok(()),
-                };
+                let Some(window) = self.state.get_window_state(w) else { return Ok(()) };
                 self.conn
-                    .set_focus_window(self.man.get_active_tag_windows(), window)?;
+                    .set_focus_window(self.state.get_active_tag_windows(), window)?;
             }
             None => {
                 self.conn.set_focus_to_root()?;
             }
-        };
+        }
         Ok(())
     }
 
     fn change_active_tag(&mut self, tag: usize) -> Res {
-        if self.man.active_tag == tag {
+        if self.state.active_tag == tag {
             log::debug!("tried switching to already active tag");
             return Ok(());
         }
         log::trace!("changing tag to {tag}");
         self.unmap_tag()?;
-        self.man.active_tag = tag;
+        self.state.active_tag = tag;
         self.map_tag()?;
         self.conn.update_active_desktop(tag as u32)?;
         Ok(())
     }
 
-    fn map_tag(&mut self) -> Res {
-        self.man
+    fn map_tag(&self) -> Res {
+        self.state
             .get_active_tag_windows()
             .iter()
             .try_for_each(|w| self.conn.map(w))
     }
 
-    fn unmap_tag(&mut self) -> Res {
-        self.man
+    fn unmap_tag(&self) -> Res {
+        self.state
             .get_active_tag_windows()
             .iter()
             .try_for_each(|w| self.conn.unmap(w))
     }
 
-    fn config_tag(&mut self) -> Res {
-        self.man
+    fn config_tag(&self) -> Res {
+        self.state
             .get_active_tag_windows()
             .iter()
             .try_for_each(|w| self.conn.config_window_from_state(w))
     }
 
     fn move_window(&mut self, tag: usize) -> Res {
-        if self.man.active_tag == tag {
+        if self.state.active_tag == tag {
             log::debug!("tried moving window to already active tag");
             return Ok(());
         }
@@ -281,20 +270,20 @@ impl<'a, C: Connection> EventHandler<'a, C> {
 
         let focus_window = self.conn.get_focus()?;
 
-        let state = match self.man.get_window_state(focus_window) {
+        let state = match self.state.get_window_state(focus_window) {
             Some(s) => *s,
             None => return Ok(()),
         };
         self.conn.unmap(&state)?;
 
-        self.man.tags[tag].windows.push(state);
-        self.man.tags[self.man.active_tag]
+        self.state.tags[tag].windows.push(state);
+        self.state.tags[self.state.active_tag]
             .windows
             .retain(|w| w.window != focus_window);
-        self.man.set_tag_focus_to_master();
+        self.state.set_tag_focus_to_master();
 
         self.conn
-            .update_window_desktop(focus_window, self.man.active_tag as u32)?;
+            .update_window_desktop(focus_window, self.state.active_tag as u32)?;
 
         Ok(())
     }
