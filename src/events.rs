@@ -11,14 +11,16 @@ use x11rb::{
 
 use crate::{
     actions::{ConnectionHandler, Res},
+    bar::BarPainter,
     keys::{HotkeyAction, KeyHandler},
     state::{StateHandler, WindowGroup, WindowState},
 };
 
 pub struct EventHandler<'a, C: Connection> {
-    pub conn: &'a ConnectionHandler<'a, C>,
+    pub conn: ConnectionHandler<'a, C>,
     pub state: StateHandler,
     pub key: KeyHandler,
+    pub bar: &'a BarPainter,
 }
 
 impl<C: Connection> EventHandler<'_, C> {
@@ -111,7 +113,9 @@ impl<C: Connection> EventHandler<'_, C> {
                 crate::actions::spawn_command(&command);
             }
             HotkeyAction::ExitFocusedWindow => {
-                let Some(focus) = self.state.get_focus() else { return Ok(()) };
+                let Some(focus) = self.state.get_focus() else {
+                    return Ok(());
+                };
                 self.conn.kill_focus(focus)?;
             }
             HotkeyAction::ChangeRatio(change) => {
@@ -166,9 +170,13 @@ impl<C: Connection> EventHandler<'_, C> {
             return Ok(());
         }
 
-        let event_type = self.conn.get_atom_name(event.type_)?;
+        let Ok(event_type) = self.conn.atoms.get_atom_name(event.type_) else {
+            return Ok(());
+        };
 
-        let first_property = self.conn.get_atom_name(data[1])?;
+        let Ok(first_property) = self.conn.atoms.get_atom_name(data[1]) else {
+            return Ok(());
+        };
 
         log::trace!(
             "GOT CLIENT EVENT window {} atom {:?} first prop {:?}",
@@ -180,12 +188,16 @@ impl<C: Connection> EventHandler<'_, C> {
         if event_type.as_str() == "_NET_WM_STATE"
             && first_property.as_str() == "_NET_WM_STATE_FULLSCREEN"
         {
-            let Some(state) = self.state.get_mut_window_state(event.window) else { return Ok(()) };
+            let Some(state) = self.state.get_mut_window_state(event.window) else {
+                return Ok(());
+            };
             let window = state.window;
             match data[0] {
                 0 => {
                     state.group = WindowGroup::Stack;
-                    self.conn.remove_atom_prop(window, "_NET_WM_STATE")?;
+                    self.conn
+                        .atoms
+                        .remove_atom_prop(window, self.conn.atoms.net_wm_state)?;
                     self.refresh()?;
                 }
                 1 => {
@@ -208,7 +220,8 @@ impl<C: Connection> EventHandler<'_, C> {
         self.refresh_focus()?;
         self.state.refresh();
         self.config_tag()?;
-        self.conn.refresh(&self.state)?;
+        self.bar
+            .draw_bar(&self.state, &self.conn, self.state.get_focus())?;
         self.state.print_state();
         Ok(())
     }
@@ -216,7 +229,9 @@ impl<C: Connection> EventHandler<'_, C> {
     fn refresh_focus(&self) -> Res {
         match self.state.tags[self.state.active_tag].focus {
             Some(w) => {
-                let Some(window) = self.state.get_window_state(w) else { return Ok(()) };
+                let Some(window) = self.state.get_window_state(w) else {
+                    return Ok(());
+                };
                 self.conn
                     .set_focus_window(self.state.get_active_tag_windows(), window)?;
             }

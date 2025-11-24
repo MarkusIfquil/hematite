@@ -14,12 +14,16 @@
 #![allow(clippy::collapsible_if)]
 
 mod actions;
+mod bar;
 mod config;
 mod events;
 mod keys;
 mod state;
+mod text;
+mod atoms;
 use crate::{
     actions::ConnectionHandler,
+    bar::BarPainter,
     config::{Config, ConfigDeserialized},
     events::EventHandler,
     keys::KeyHandler,
@@ -36,21 +40,23 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let (conn, screen_num) = x11rb::connect(None)?;
     let config = Config::from(ConfigDeserialized::new());
     let conn_handler = ConnectionHandler::new(&conn, screen_num, &config)?;
+    let bar = BarPainter::new(&conn_handler, &config)?;
     let key_handler = KeyHandler::new(&conn, &config)?;
     let state = StateHandler::new(TilingInfo {
         gap: config.spacing as u16,
         ratio: config.ratio,
         width: conn_handler.screen.width_in_pixels,
         height: conn_handler.screen.height_in_pixels,
-        bar_height: conn_handler.bar.height,
+        bar_height: bar.bar.height,
     });
 
-    conn_handler.draw_bar(&state, None)?;
+    bar.draw_bar(&state, &conn_handler, None)?;
 
     let mut event_handler = EventHandler {
-        conn: &conn_handler,
+        conn: conn_handler,
         state,
         key: key_handler,
+        bar: &bar,
     };
 
     let (tx, rx) = mpsc::channel();
@@ -64,9 +70,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     loop {
         if rx.try_recv().is_ok() {
-            if let Err(e) =
-                conn_handler.draw_bar(&event_handler.state, event_handler.state.get_focus())
-            {
+            if let Err(e) = bar.draw_bar(
+                &event_handler.state,
+                &event_handler.conn,
+                event_handler.state.get_focus(),
+            ) {
                 log::error!("{e}");
             }
         }

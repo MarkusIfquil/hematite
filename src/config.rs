@@ -1,20 +1,32 @@
 use crate::keys::HotkeyAction;
 use serde::{Deserialize, Serialize};
 use std::num::ParseIntError;
+use x11rb::protocol::render::Color;
 
 pub const SPACING: u32 = 10;
 pub const RATIO: f32 = 0.5;
 pub const BORDER_SIZE: u32 = 1;
-pub const MAIN_COLOR: (u16, u16, u16) = (4369, 4369, 6939); // #11111b
-pub const SECONDARY_COLOR: (u16, u16, u16) = (29812, 51143, 60652); // #74c7ec
+pub const MAIN_COLOR: Color = Color {
+    red: 4369,
+    green: 4369,
+    blue: 6939,
+    alpha: 65535,
+}; // #11111b
+pub const SECONDARY_COLOR: Color = Color {
+    red: 29812,
+    green: 51143,
+    blue: 60652,
+    alpha: 65535,
+}; // #74c7ec
 pub const FONT: &str = "fixed";
 
-fn hex_color_to_rgb(hex: &str) -> Result<(u16, u16, u16), ParseIntError> {
-    Ok((
-        u16::from_str_radix(&hex[1..3], 16)? * 257,
-        u16::from_str_radix(&hex[3..5], 16)? * 257,
-        u16::from_str_radix(&hex[5..7], 16)? * 257,
-    ))
+fn hex_color_to_argb(hex: &str) -> Result<Color, ParseIntError> {
+    Ok(Color {
+        red: u16::from_str_radix(&hex[1..3], 16)? * 257,
+        green: u16::from_str_radix(&hex[3..5], 16)? * 257,
+        blue: u16::from_str_radix(&hex[5..7], 16)? * 257,
+        alpha: 65535,
+    })
 }
 
 #[derive(Clone)]
@@ -22,8 +34,8 @@ pub struct Config {
     pub spacing: u32,
     pub ratio: f32,
     pub border_size: u32,
-    pub main_color: (u16, u16, u16),
-    pub secondary_color: (u16, u16, u16),
+    pub main_color: Color,
+    pub secondary_color: Color,
     pub font: String,
     pub font_size: u32,
     pub hotkeys: Vec<HotkeyConfig>,
@@ -31,12 +43,12 @@ pub struct Config {
 
 impl From<ConfigDeserialized> for Config {
     fn from(config: ConfigDeserialized) -> Self {
-        let main_color = hex_color_to_rgb(&config.colors.main_color).unwrap_or_else(|_| {
+        let main_color = hex_color_to_argb(&config.colors.main_color).unwrap_or_else(|_| {
             log::debug!("BAD COLOR VALUE");
             MAIN_COLOR
         });
         let secondary_color =
-            hex_color_to_rgb(&config.colors.secondary_color).unwrap_or_else(|_| {
+            hex_color_to_argb(&config.colors.secondary_color).unwrap_or_else(|_| {
                 log::debug!("BAD COLOR VALUE");
                 SECONDARY_COLOR
             });

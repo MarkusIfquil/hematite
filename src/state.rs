@@ -21,7 +21,7 @@ pub struct WindowState {
 }
 
 impl WindowState {
-    pub fn new(window: Window, frame_window: Window) -> Self {
+    pub const fn new(window: Window, frame_window: Window) -> Self {
         Self {
             window,
             frame_window,
@@ -50,7 +50,7 @@ pub struct Tag {
     pub windows: Vec<WindowState>,
 }
 impl Tag {
-    fn new(tag: usize) -> Self {
+    const fn new(tag: usize) -> Self {
         Self {
             num: tag,
             focus: None,
