@@ -4,6 +4,7 @@ use std::process::exit;
 use x11rb::protocol::render::Color;
 use x11rb::protocol::xproto::ConnectionExt;
 use x11rb::protocol::xproto::Pixmap;
+use x11rb::protocol::xproto::Rectangle;
 use x11rb::wrapper::ConnectionExt as OtherConnectionExt;
 use x11rb::{
     COPY_DEPTH_FROM_PARENT, CURRENT_TIME,
@@ -25,15 +26,66 @@ use crate::atoms::Atoms;
 use crate::{
     config::Config,
     keys::KeyHandler,
-    state::{StateHandler, WindowGroup, WindowState},
+    state::{WindowGroup, WindowState},
 };
 
 pub type Res = Result<(), ReplyOrIdError>;
 pub type Id = u32;
 
 pub struct Colors {
-    pub main: Id,
-    pub secondary: Id,
+    pub(crate) main: Id,
+    pub(crate) secondary: Id,
+}
+
+pub trait ConnectionStateExt {
+    fn map(&self, window: &WindowState) -> Res;
+    fn unmap(&self, window: &WindowState) -> Res;
+    fn add_window(&self, window: &WindowState) -> Res;
+    fn destroy_window(&self, window: &WindowState) -> Res;
+    fn create_window(&self, window: &WindowState) -> Res;
+    fn clear_window(&self, window: &WindowState) -> Res;
+    fn config_window_from_state(&self, window: &WindowState) -> Res;
+    fn set_fullscreen(&self, window: &WindowState) -> Res;
+    fn create_pixmap_from_win(&self, pixmap: Pixmap, window: &WindowState) -> Res;
+    fn set_focus_window(&self, windows: &[WindowState], focus: &WindowState) -> Res;
+    fn copy_window_to_window(&self, gc: Gcontext, window_1: Window, window_2: &WindowState) -> Res;
+    fn grab_keys(&self, handler: &KeyHandler) -> Res;
+    fn handle_config(&self, event: ConfigureRequestEvent) -> Res;
+}
+
+pub trait ConnectionActionExt {
+    fn get_focus(&self) -> Result<u32, ReplyOrIdError>;
+    fn set_focus_to_root(&self) -> Result<(), ReplyOrIdError>;
+    fn kill_focus(&self, focus: Id) -> Res;
+    fn get_window_name(&self, window: Window) -> Result<String, ReplyOrIdError>;
+    fn create_gc(&self, gc: Id, color_background: Id, color_foreground: Id) -> Res;
+    fn draw_to_pixmap(
+        &self,
+        pixmap: Pixmap,
+        gc: Gcontext,
+        x: i16,
+        y: i16,
+        width: u16,
+        height: u16,
+        data: &[u8],
+    ) -> Res;
+    fn set_cursor(&self) -> Res;
+    fn generate_id(&self) -> Result<u32, ReplyOrIdError>;
+    fn get_screen_geometry(&self) -> (u16, u16);
+    fn get_root(&self) -> u32;
+    fn add_heartbeat_window(&self) -> Res;
+    fn fill_rectangle(&self, pixmap: Pixmap, gc: Gcontext, rect: Rectangle) -> Res;
+}
+
+pub trait ConnectionAtomExt {
+    fn net_add_allowed_actions(&self, window: Window) -> Res;
+    fn net_add_frame_extents(&self, window: Window) -> Res;
+    fn wm_activate_window(&self, window: Window) -> Res;
+    fn net_set_active_window(&self, window: Window) -> Res;
+    fn net_set_state_fullscreen(&self, window: Window) -> Res;
+    fn net_update_active_desktop(&self, tag: u32) -> Res;
+    fn net_update_window_desktop(&self, window: Window, tag: u32) -> Res;
+    fn net_update_client_list(&self, windows: &[Window]) -> Res;
 }
 
 pub struct ConnectionHandler<'a, C: Connection> {
@@ -41,8 +93,8 @@ pub struct ConnectionHandler<'a, C: Connection> {
     pub screen: &'a Screen,
     screen_num: usize,
     pub atoms: Atoms<'a, C>,
-    pub config: Config,
-    pub colors: Colors,
+    config: Config,
+    pub(crate) colors: Colors,
 }
 
 impl<'a, C: Connection> ConnectionHandler<'a, C> {
@@ -74,22 +126,24 @@ impl<'a, C: Connection> ConnectionHandler<'a, C> {
         handler.add_heartbeat_window()?;
         Ok(handler)
     }
+}
 
-    pub fn map(&self, window: &WindowState) -> Res {
+impl<C: Connection> ConnectionStateExt for ConnectionHandler<'_, C> {
+    fn map(&self, window: &WindowState) -> Res {
         log::trace!("handling map of {}", window.window);
         self.conn.map_window(window.frame_window)?;
         self.conn.map_window(window.window)?;
         Ok(())
     }
 
-    pub fn unmap(&self, window: &WindowState) -> Res {
+    fn unmap(&self, window: &WindowState) -> Res {
         log::trace!("handling unmap of {}", window.window);
         self.conn.unmap_window(window.window)?;
         self.conn.unmap_window(window.frame_window)?;
         Ok(())
     }
 
-    pub fn handle_config(&self, event: ConfigureRequestEvent) -> Res {
+    fn handle_config(&self, event: ConfigureRequestEvent) -> Res {
         log::trace!(
             "EVENT CONFIG w {} x {} y {} w {} self.bar.height {}",
             event.window,
@@ -103,7 +157,7 @@ impl<'a, C: Connection> ConnectionHandler<'a, C> {
         Ok(())
     }
 
-    pub fn add_window(&self, window: &WindowState) -> Res {
+    fn add_window(&self, window: &WindowState) -> Res {
         log::trace!("creating frame of {}", window.window);
         self.conn.create_window(
             COPY_DEPTH_FROM_PARENT,
@@ -137,30 +191,9 @@ impl<'a, C: Connection> ConnectionHandler<'a, C> {
             ),
         )?;
 
-        self.atoms.change_atom_prop(
-            window.window,
-            self.atoms.net_wm_allowed_actions,
-            &[self.atoms.net_wm_action_fullscreen],
-        )?;
-
-        self.atoms.change_cardinal_prop(
-            window.window,
-            self.atoms.net_frame_extents,
-            &[
-                self.config.border_size,
-                self.config.border_size,
-                self.config.border_size,
-                self.config.border_size,
-            ],
-        )?;
-
-        self.conn.change_property32(
-            PropMode::REPLACE,
-            window.window,
-            self.atoms.wm_state,
-            self.atoms.wm_state,
-            &[1, 0],
-        )?;
+        self.net_add_allowed_actions(window.window)?;
+        self.net_add_frame_extents(window.window)?;
+        self.wm_activate_window(window.window)?;
 
         self.conn.grab_server()?;
         self.conn.change_save_set(SetMode::INSERT, window.window)?;
@@ -171,7 +204,7 @@ impl<'a, C: Connection> ConnectionHandler<'a, C> {
         Ok(())
     }
 
-    pub fn destroy_window(&self, window: &WindowState) -> Res {
+    fn destroy_window(&self, window: &WindowState) -> Res {
         log::trace!("destroying window: {}", window.window);
         self.conn.change_save_set(SetMode::DELETE, window.window)?;
         self.conn
@@ -181,7 +214,7 @@ impl<'a, C: Connection> ConnectionHandler<'a, C> {
         Ok(())
     }
 
-    pub fn set_focus_window(&self, windows: &[WindowState], window: &WindowState) -> Res {
+    fn set_focus_window(&self, windows: &[WindowState], window: &WindowState) -> Res {
         log::trace!("setting focus to: {:?}", window.window);
         self.conn
             .set_input_focus(InputFocus::PARENT, window.window, CURRENT_TIME)?;
@@ -207,20 +240,12 @@ impl<'a, C: Connection> ConnectionHandler<'a, C> {
             &ChangeWindowAttributesAux::new().border_pixel(self.colors.secondary),
         )?;
 
-        self.atoms.change_window_prop(
-            self.screen.root,
-            self.atoms.net_active_window,
-            &[window.window],
-        )?;
+        self.net_set_active_window(window.window)?;
 
         Ok(())
     }
 
-    pub fn get_focus(&self) -> Result<u32, ReplyOrIdError> {
-        Ok(self.conn.get_input_focus()?.reply()?.focus)
-    }
-
-    pub fn config_window_from_state(&self, window: &WindowState) -> Res {
+    fn config_window_from_state(&self, window: &WindowState) -> Res {
         log::trace!("configuring window {} from state", window.window);
         self.conn
             .configure_window(
@@ -254,40 +279,10 @@ impl<'a, C: Connection> ConnectionHandler<'a, C> {
         Ok(())
     }
 
-    pub fn set_focus_to_root(&self) -> Result<(), ReplyOrIdError> {
-        log::trace!("setting focus to root");
-        self.conn
-            .set_input_focus(InputFocus::NONE, 1_u32, CURRENT_TIME)?;
-
-        self.atoms
-            .change_window_prop(self.screen.root, self.atoms.net_active_window, &[1])?;
-        Ok(())
-    }
-
-    pub fn kill_focus(&self, focus: Id) -> Res {
-        log::trace!("killing focus window {focus}");
-        self.conn.send_event(
-            false,
-            focus,
-            EventMask::NO_EVENT,
-            ClientMessageEvent::new(
-                32,
-                focus,
-                self.atoms.wm_protocols,
-                [self.atoms.wm_delete_window, 0, 0, 0, 0],
-            ),
-        )?;
-        Ok(())
-    }
-
-    pub fn set_fullscreen(&self, window: &WindowState) -> Res {
+    fn set_fullscreen(&self, window: &WindowState) -> Res {
         log::trace!("setting window to fullscreen {}", window.window);
         self.config_window_from_state(window)?;
-        self.atoms.change_atom_prop(
-            window.window,
-            self.atoms.net_wm_state,
-            &[self.atoms.net_wm_state_fullscreen],
-        )?;
+        self.net_set_state_fullscreen(window.window)?;
         self.conn.configure_window(
             window.frame_window,
             &ConfigureWindowAux::new().border_width(0),
@@ -295,75 +290,7 @@ impl<'a, C: Connection> ConnectionHandler<'a, C> {
         Ok(())
     }
 
-    pub fn update_client_list(&self, state: &StateHandler) -> Res {
-        let ids: Vec<Id> = state.tags[state.active_tag]
-            .windows
-            .iter()
-            .map(|w| w.window)
-            .collect();
-
-        self.atoms
-            .change_window_prop(self.screen.root, self.atoms.net_client_list, &ids)?;
-        Ok(())
-    }
-
-    pub fn update_active_desktop(&self, tag: u32) -> Res {
-        self.atoms
-            .change_window_prop(self.screen.root, self.atoms.net_current_desktop, &[tag])?;
-        Ok(())
-    }
-
-    pub fn update_window_desktop(&self, window: Window, tag: u32) -> Res {
-        self.atoms
-            .change_window_prop(window, self.atoms.net_wm_desktop, &[tag])?;
-        Ok(())
-    }
-
-    pub fn get_window_name(&self, window: Window) -> Result<String, ReplyOrIdError> {
-        log::trace!("getting window name of {window}");
-
-        let result = String::from_utf8(
-            self.conn
-                .get_property(
-                    false,
-                    window,
-                    self.atoms.net_wm_name,
-                    self.atoms.utf8_string,
-                    0,
-                    100,
-                )?
-                .reply()?
-                .value,
-        )
-        .unwrap_or_default();
-
-        if result.is_empty() {
-            let result = String::from_utf8(
-                self.conn
-                    .get_property(false, window, AtomEnum::WM_NAME, AtomEnum::STRING, 0, 100)?
-                    .reply()?
-                    .value,
-            )
-            .unwrap_or_default();
-            Ok(result)
-        } else {
-            Ok(result)
-        }
-    }
-
-    pub fn create_gc(&self, gc: Id, color_background: Id, color_foreground: Id) -> Res {
-        self.conn.create_gc(
-            gc,
-            self.screen.root,
-            &CreateGCAux::new()
-                .graphics_exposures(0)
-                .background(color_background)
-                .foreground(color_foreground),
-        )?;
-        Ok(())
-    }
-
-    pub fn create_pixmap_from_win(&self, pixmap: Pixmap, window: &WindowState) -> Res {
+    fn create_pixmap_from_win(&self, pixmap: Pixmap, window: &WindowState) -> Res {
         self.conn.create_pixmap(
             self.screen.root_depth,
             pixmap,
@@ -374,7 +301,7 @@ impl<'a, C: Connection> ConnectionHandler<'a, C> {
         Ok(())
     }
 
-    pub fn create_window(&self, window: &WindowState) -> Res {
+    fn create_window(&self, window: &WindowState) -> Res {
         self.conn.create_window(
             COPY_DEPTH_FROM_PARENT,
             window.window,
@@ -391,7 +318,7 @@ impl<'a, C: Connection> ConnectionHandler<'a, C> {
         Ok(())
     }
 
-    pub fn clear_window(&self, window: &WindowState) -> Res {
+    fn clear_window(&self, window: &WindowState) -> Res {
         self.conn.clear_area(
             false,
             window.window,
@@ -403,12 +330,7 @@ impl<'a, C: Connection> ConnectionHandler<'a, C> {
         Ok(())
     }
 
-    pub fn copy_window_to_window(
-        &self,
-        gc: Gcontext,
-        window_1: Window,
-        window_2: &WindowState,
-    ) -> Res {
+    fn copy_window_to_window(&self, gc: Gcontext, window_1: Window, window_2: &WindowState) -> Res {
         self.conn.copy_area(
             window_1,
             window_2.window,
@@ -423,7 +345,28 @@ impl<'a, C: Connection> ConnectionHandler<'a, C> {
         Ok(())
     }
 
-    pub fn draw_to_pixmap(
+    fn grab_keys(&self, handler: &KeyHandler) -> Res {
+        handler.hotkeys.iter().try_for_each(|h| {
+            self.conn
+                .grab_key(
+                    true,
+                    self.screen.root,
+                    h.modifier,
+                    h.code,
+                    GrabMode::ASYNC,
+                    GrabMode::ASYNC,
+                )?
+                .check()
+        })?;
+        Ok(())
+    }
+}
+
+impl<C: Connection> ConnectionActionExt for ConnectionHandler<'_, C> {
+    fn get_focus(&self) -> Result<u32, ReplyOrIdError> {
+        Ok(self.conn.get_input_focus()?.reply()?.focus)
+    }
+    fn draw_to_pixmap(
         &self,
         pixmap: Pixmap,
         gc: Gcontext,
@@ -501,19 +444,161 @@ impl<'a, C: Connection> ConnectionHandler<'a, C> {
         Ok(())
     }
 
-    fn grab_keys(&self, handler: &KeyHandler) -> Res {
-        handler.hotkeys.iter().try_for_each(|h| {
+    fn get_window_name(&self, window: Window) -> Result<String, ReplyOrIdError> {
+        log::trace!("getting window name of {window}");
+
+        let result = String::from_utf8(
             self.conn
-                .grab_key(
-                    true,
-                    self.screen.root,
-                    h.modifier,
-                    h.code,
-                    GrabMode::ASYNC,
-                    GrabMode::ASYNC,
+                .get_property(
+                    false,
+                    window,
+                    self.atoms.net_wm_name,
+                    self.atoms.utf8_string,
+                    0,
+                    100,
                 )?
-                .check()
-        })?;
+                .reply()?
+                .value,
+        )
+        .unwrap_or_default();
+
+        if result.is_empty() {
+            let result = String::from_utf8(
+                self.conn
+                    .get_property(false, window, AtomEnum::WM_NAME, AtomEnum::STRING, 0, 100)?
+                    .reply()?
+                    .value,
+            )
+            .unwrap_or_default();
+            Ok(result)
+        } else {
+            Ok(result)
+        }
+    }
+
+    fn create_gc(&self, gc: Id, color_background: Id, color_foreground: Id) -> Res {
+        self.conn.create_gc(
+            gc,
+            self.screen.root,
+            &CreateGCAux::new()
+                .graphics_exposures(0)
+                .background(color_background)
+                .foreground(color_foreground),
+        )?;
+        Ok(())
+    }
+
+    fn set_focus_to_root(&self) -> Result<(), ReplyOrIdError> {
+        log::trace!("setting focus to root");
+        self.conn
+            .set_input_focus(InputFocus::NONE, 1_u32, CURRENT_TIME)?;
+
+        self.atoms
+            .change_window_prop(self.screen.root, self.atoms.net_active_window, &[1])?;
+        Ok(())
+    }
+
+    fn kill_focus(&self, focus: Id) -> Res {
+        log::trace!("killing focus window {focus}");
+        self.conn.send_event(
+            false,
+            focus,
+            EventMask::NO_EVENT,
+            ClientMessageEvent::new(
+                32,
+                focus,
+                self.atoms.wm_protocols,
+                [self.atoms.wm_delete_window, 0, 0, 0, 0],
+            ),
+        )?;
+        Ok(())
+    }
+
+    fn generate_id(&self) -> Result<u32, ReplyOrIdError> {
+        self.conn.generate_id()
+    }
+
+    fn get_screen_geometry(&self) -> (u16, u16) {
+        (self.screen.width_in_pixels, self.screen.height_in_pixels)
+    }
+
+    fn get_root(&self) -> u32 {
+        self.screen.root
+    }
+
+    fn fill_rectangle(&self, pixmap: Pixmap, gc: Gcontext, rect: Rectangle) -> Res {
+        self.conn
+            .poly_fill_rectangle(pixmap, gc, &[rect])?
+            .check()?;
+        Ok(())
+    }
+}
+
+impl<C: Connection> ConnectionAtomExt for ConnectionHandler<'_, C> {
+    fn net_update_client_list(&self, windows: &[Window]) -> Res {
+        self.atoms
+            .change_window_prop(self.screen.root, self.atoms.net_client_list, windows)?;
+        Ok(())
+    }
+
+    fn net_update_active_desktop(&self, tag: u32) -> Res {
+        self.atoms
+            .change_window_prop(self.screen.root, self.atoms.net_current_desktop, &[tag])?;
+        Ok(())
+    }
+
+    fn net_update_window_desktop(&self, window: Window, tag: u32) -> Res {
+        self.atoms
+            .change_window_prop(window, self.atoms.net_wm_desktop, &[tag])?;
+        Ok(())
+    }
+
+    fn net_add_allowed_actions(&self, window: Window) -> Res {
+        self.atoms.change_atom_prop(
+            window,
+            self.atoms.net_wm_allowed_actions,
+            &[self.atoms.net_wm_action_fullscreen],
+        )?;
+        Ok(())
+    }
+
+    fn net_add_frame_extents(&self, window: Window) -> Res {
+        self.atoms.change_cardinal_prop(
+            window,
+            self.atoms.net_frame_extents,
+            &[
+                self.config.border_size,
+                self.config.border_size,
+                self.config.border_size,
+                self.config.border_size,
+            ],
+        )?;
+        Ok(())
+    }
+
+    fn wm_activate_window(&self, window: Window) -> Res {
+        self.conn.change_property32(
+            PropMode::REPLACE,
+            window,
+            self.atoms.wm_state,
+            self.atoms.wm_state,
+            &[1, 0],
+        )?;
+        Ok(())
+    }
+
+    fn net_set_active_window(&self, window: Window) -> Res {
+        self.atoms
+            .change_window_prop(self.screen.root, self.atoms.net_active_window, &[window])?;
+        Ok(())
+    }
+
+    fn net_set_state_fullscreen(&self, window: Window) -> Res {
+        self.atoms.change_atom_prop(
+            window,
+            self.atoms.net_wm_state,
+            &[self.atoms.net_wm_state_fullscreen],
+        )?;
         Ok(())
     }
 }

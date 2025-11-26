@@ -3,28 +3,30 @@
 #![warn(clippy::suspicious)]
 #![warn(clippy::complexity)]
 #![warn(clippy::perf)]
-// #![warn(clippy::nursery)]
 #![warn(clippy::style)]
-// #![warn(clippy::pedantic)]
+// #![warn(clippy::nursery)]
+#![warn(clippy::pedantic)]
 // #![warn(clippy::restriction)]
 #![allow(clippy::cast_sign_loss)]
 #![allow(clippy::cast_possible_truncation)]
 #![allow(clippy::cast_possible_wrap)]
 #![allow(clippy::cast_precision_loss)]
 #![allow(clippy::collapsible_if)]
+#![allow(clippy::too_many_arguments)]
+#![allow(clippy::too_many_lines)]
 
-mod actions;
+mod atoms;
 mod bar;
 mod config;
+mod connection;
 mod events;
 mod keys;
 mod state;
 mod text;
-mod atoms;
 use crate::{
-    actions::ConnectionHandler,
     bar::BarPainter,
     config::{Config, ConfigDeserialized},
+    connection::ConnectionHandler,
     events::EventHandler,
     keys::KeyHandler,
     state::{StateHandler, TilingInfo},
@@ -40,8 +42,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let (conn, screen_num) = x11rb::connect(None)?;
     let config = Config::from(ConfigDeserialized::new());
     let conn_handler = ConnectionHandler::new(&conn, screen_num, &config)?;
-    let bar = BarPainter::new(&conn_handler, &config)?;
-    let key_handler = KeyHandler::new(&conn, &config)?;
+    let bar = BarPainter::new(&conn_handler, &conn_handler.colors, &config)?;
+    let keys = KeyHandler::new(&conn, &config)?;
     let state = StateHandler::new(TilingInfo {
         gap: config.spacing as u16,
         ratio: config.ratio,
@@ -55,7 +57,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut event_handler = EventHandler {
         conn: conn_handler,
         state,
-        key: key_handler,
+        key: keys,
         bar: &bar,
     };
 
@@ -63,9 +65,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     thread::spawn(move || -> Result<(), ReplyOrIdError> {
         loop {
-            let _ = tx.send(1);
+            if let Err(e) = tx.send(1) {
+                log::error!("channel error: {e}");
+                break;
+            }
             thread::sleep(Duration::from_secs(1));
         }
+        Ok(())
     });
 
     loop {

@@ -7,7 +7,7 @@ use x11rb::{
     wrapper::ConnectionExt as _,
 };
 
-use crate::actions::Res;
+use crate::connection::Res;
 
 pub struct Atoms<'a, C> {
     conn: &'a C,

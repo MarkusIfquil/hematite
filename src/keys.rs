@@ -36,13 +36,13 @@ pub struct KeyHandler {
 }
 
 impl KeyHandler {
-    pub fn new<C: Connection>(connection: &C, config: &Config) -> Result<Self, ReplyOrIdError> {
+    pub fn new(conn: &impl Connection, config: &Config) -> Result<Self, ReplyOrIdError> {
         //get min-max code
-        let min = connection.setup().min_keycode;
-        let max = connection.setup().max_keycode;
+        let min = conn.setup().min_keycode;
+        let max = conn.setup().max_keycode;
 
         //get mapping
-        let mapping = connection
+        let mapping = conn
             .get_keyboard_mapping(min, max - min + 1)?
             .reply()?;
 

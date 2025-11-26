@@ -10,8 +10,10 @@ use x11rb::{
 };
 
 use crate::{
-    actions::{ConnectionHandler, Res},
     bar::BarPainter,
+    connection::{
+        ConnectionActionExt, ConnectionAtomExt, ConnectionHandler, ConnectionStateExt, Res,
+    },
     keys::{HotkeyAction, KeyHandler},
     state::{StateHandler, WindowGroup, WindowState},
 };
@@ -61,7 +63,7 @@ impl<C: Connection> EventHandler<'_, C> {
             event.response_type
         );
 
-        let window = WindowState::new(event.window, self.conn.conn.generate_id()?);
+        let window = WindowState::new(event.window, self.conn.generate_id()?);
 
         self.conn.add_window(&window)?;
         self.state.add_window(window);
@@ -81,7 +83,13 @@ impl<C: Connection> EventHandler<'_, C> {
         );
 
         self.conn.destroy_window(window)?;
-        self.conn.update_client_list(&self.state)?;
+        self.conn.net_update_client_list(
+            &self.state.tags[self.state.active_tag]
+                .windows
+                .iter()
+                .map(|w| w.window)
+                .collect::<Vec<u32>>(),
+        )?;
 
         self.state
             .get_mut_active_tag_windows()
@@ -110,7 +118,7 @@ impl<C: Connection> EventHandler<'_, C> {
                 self.move_window(n - 1)?;
             }
             HotkeyAction::Spawn(command) => {
-                crate::actions::spawn_command(&command);
+                crate::connection::spawn_command(&command);
             }
             HotkeyAction::ExitFocusedWindow => {
                 let Some(focus) = self.state.get_focus() else {
@@ -251,7 +259,7 @@ impl<C: Connection> EventHandler<'_, C> {
         self.unmap_tag()?;
         self.state.active_tag = tag;
         self.map_tag()?;
-        self.conn.update_active_desktop(tag as u32)?;
+        self.conn.net_update_active_desktop(tag as u32)?;
         Ok(())
     }
 
@@ -298,7 +306,7 @@ impl<C: Connection> EventHandler<'_, C> {
         self.state.set_tag_focus_to_master();
 
         self.conn
-            .update_window_desktop(focus_window, self.state.active_tag as u32)?;
+            .net_update_window_desktop(focus_window, self.state.active_tag as u32)?;
 
         Ok(())
     }
