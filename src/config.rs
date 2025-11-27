@@ -28,7 +28,7 @@ pub const SECONDARY_COLOR: Color = Color {
     alpha: 65535,
 }; // #74c7ec
 /// The default font.
-pub const FONT: &str = "fixed";
+pub const FONT: &str = "/usr/share/fonts/gnu-free/FreeSans.otf";
 
 /// A map between a regular RGBA color and X11's color format
 fn hex_color_to_argb(hex: &str) -> Result<Color, ParseIntError> {
@@ -231,12 +231,12 @@ impl Default for ConfigDeserialized {
             HotkeyConfig {
                 modifiers: "MOD".to_string(),
                 key: "h".to_string(),
-                action: HotkeyAction::ChangeRatio(-0.05),
+                action: HotkeyAction::ChangeRatio(0.05),
             },
             HotkeyConfig {
                 modifiers: "MOD".to_string(),
                 key: "j".to_string(),
-                action: HotkeyAction::ChangeRatio(0.05),
+                action: HotkeyAction::ChangeRatio(-0.05),
             },
             // change focus
             HotkeyConfig {
