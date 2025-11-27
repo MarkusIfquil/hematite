@@ -15,7 +15,7 @@ It is **simple**, only containing ~1500 lines of code, and is only concerned abo
 
 It is **fast** and **efficient**, refreshing only when necessary and contains as few moving parts as possible.
 
-It is **opinionated**, contains no support for external scripting, with a minimal config file for appearance. It also only contains one tiling layout, which is master-stack.
+It is **opinionated**, contains no support for external scripting, with a minimal config file for appearance. It also contains only one tiling layout, which is master-stack.
 # installation
 ## 1. Build from source (recommended installation)
 ### clone the repository

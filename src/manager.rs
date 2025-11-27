@@ -39,9 +39,9 @@ pub struct EventHandler<'connection, C: Connection> {
 
 impl<C: Connection> EventHandler<'_, C> {
     /// Handles X11 events related to managing windows.
-    /// 
+    ///
     /// Currently, only mapping, unmapping, keypresses, entering a window, configure requests and messages are handled.
-    /// 
+    ///
     /// # Errors
     /// Any inappropriate call to the X11 server will be bubbled up by this function.
     pub fn handle_event(&mut self, event: &Event) -> Res {
@@ -69,8 +69,8 @@ impl<C: Connection> EventHandler<'_, C> {
         Ok(())
     }
 
-    /// Handles a `MapRequestEvent`. 
-    /// 
+    /// Handles a `MapRequestEvent`.
+    ///
     /// Only maps unmapped windows. Adds the window (including frame) using a connection and adds the window to the state. Also refreshes the display.
     fn handle_map_request(&mut self, event: MapRequestEvent) -> Res {
         if self.state.get_window_state(event.window).is_some() {
@@ -91,8 +91,8 @@ impl<C: Connection> EventHandler<'_, C> {
         self.refresh()
     }
 
-    /// Handles an `UnmapNotifyEvent`. 
-    /// 
+    /// Handles an `UnmapNotifyEvent`.
+    ///
     /// Only unmaps existing windows. Destroys the window and frame and removes it from the state. Also refreshes the display.
     fn handle_unmap_notify(&mut self, event: UnmapNotifyEvent) -> Res {
         let Some(window) = self.state.get_window_state(event.window) else {
@@ -122,8 +122,8 @@ impl<C: Connection> EventHandler<'_, C> {
         self.refresh()
     }
 
-    /// Handles a `KeyPressEvent`. 
-    /// 
+    /// Handles a `KeyPressEvent`.
+    ///
     /// Only parses keys with valid hotkey actions. The parsed action is also handled. Also refreshes the display.
     fn handle_keypress(&mut self, event: KeyPressEvent) -> Res {
         let Some(action) = self.key.get_action(event) else {
@@ -173,7 +173,7 @@ impl<C: Connection> EventHandler<'_, C> {
     }
 
     /// Handles an `EnterNotfiyEvent`.
-    /// 
+    ///
     /// Handles enters from window to window and window to root. Also refreshes the display.
     fn handle_enter(&mut self, event: EnterNotifyEvent) -> Res {
         log::trace!(
@@ -194,7 +194,7 @@ impl<C: Connection> EventHandler<'_, C> {
     }
 
     /// Handles a `ConfigureRequestEvent`.
-    /// 
+    ///
     /// Only configures the window if it exists in the state.
     fn handle_config(&self, event: ConfigureRequestEvent) -> Res {
         if self.state.get_window_state(event.window).is_some() {
@@ -204,9 +204,9 @@ impl<C: Connection> EventHandler<'_, C> {
     }
 
     /// Handles a `ClientMessageEvent`.
-    /// 
+    ///
     /// A client message is made up of a window and message data, usually containing atoms, meant to change the appearance or behaviour of a window.
-    /// 
+    ///
     /// Currently only the fullscreen request message is handled.
     fn handle_client_message(&mut self, event: ClientMessageEvent) -> Res {
         let data = event.data.as_data32();
@@ -240,18 +240,14 @@ impl<C: Connection> EventHandler<'_, C> {
             let window = state.window;
             match data[0] {
                 0 => {
+                    log::debug!("setting group of {window} to stack!");
                     state.group = WindowGroup::Stack;
-                    self.conn
-                        .atoms
-                        .remove_atom_prop(window, self.conn.atoms.net_wm_state)?;
+                    self.conn.remove_fullscreen(state)?;
                     self.refresh()?;
                 }
                 1 => {
-                    state.group = WindowGroup::Floating;
-                    state.x = 0;
-                    state.y = 0;
-                    state.width = self.conn.screen.width_in_pixels;
-                    state.height = self.conn.screen.height_in_pixels;
+                    log::debug!("setting group of {window} to fullscreen!");
+                    state.group = WindowGroup::Fullscreen;
                     self.conn.set_fullscreen(state)?;
                     self.refresh()?;
                 }
@@ -263,7 +259,7 @@ impl<C: Connection> EventHandler<'_, C> {
     }
 
     /// Refreshes the state and status bar.
-    /// 
+    ///
     /// This function does a laundry list of tasks:
     /// - Sets the focus using the focus set in state
     /// - Tiles windows using state
@@ -281,7 +277,7 @@ impl<C: Connection> EventHandler<'_, C> {
     }
 
     /// Refreshes the displayed focus.
-    /// 
+    ///
     /// If no window is focused the root window obtains the focus.
     fn refresh_focus(&self) -> Res {
         match self.state.tags[self.state.active_tag].focus {
@@ -300,7 +296,7 @@ impl<C: Connection> EventHandler<'_, C> {
     }
 
     /// Switches the display from one tag to another, unmapping the old tag and mapping the new.
-    /// 
+    ///
     /// Only switching between two different tags is permitted.
     fn change_active_tag(&mut self, tag: usize) -> Res {
         if self.state.active_tag == tag {
@@ -340,7 +336,7 @@ impl<C: Connection> EventHandler<'_, C> {
     }
 
     /// Moves the focused window from one tag to another.
-    /// 
+    ///
     /// Only moving to a different tag is permitted.
     fn move_window(&mut self, tag: usize) -> Res {
         if self.state.active_tag == tag {

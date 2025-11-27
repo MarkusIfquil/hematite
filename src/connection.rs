@@ -1,4 +1,4 @@
-//! 
+//!
 //! This module extends `x11rb`'s `Connection` trait to interact with the manager state, provide more complicated actions, and manage atoms.
 use std::process::Command;
 use std::process::exit;
@@ -7,6 +7,7 @@ use x11rb::protocol::render::Color;
 use x11rb::protocol::xproto::ConnectionExt as _;
 use x11rb::protocol::xproto::Pixmap;
 use x11rb::protocol::xproto::Rectangle;
+use x11rb::protocol::xproto::StackMode;
 use x11rb::wrapper::ConnectionExt as _;
 use x11rb::{
     COPY_DEPTH_FROM_PARENT, CURRENT_TIME,
@@ -52,7 +53,7 @@ pub struct Colors {
 /// Defines all the ways the connection interacts with state. Usually a `WindowState` reference is passed as a shorthand for its coordinates and size.
 pub trait ConnectionStateExt {
     /// Maps a window and its frame window to the display based on its state.
-    /// 
+    ///
     /// # Errors
     /// Returns an error if the window does not exist.
     fn map(&self, window: &WindowState) -> Res;
@@ -86,6 +87,11 @@ pub trait ConnectionStateExt {
     /// # Errors
     /// Returns an error if the window does not exist or if the window can't be resized.
     fn set_fullscreen(&self, window: &WindowState) -> Res;
+    /// Removes fullscreen properties from the window.
+    ///
+    /// # Errors
+    /// Returns an error if the window does not exist.
+    fn remove_fullscreen(&self, window: &WindowState) -> Res;
     /// Creates a pixmap (basically an off screen window to draw to) from its state.
     /// # Errors
     /// Returns an error if the window does not exist.
@@ -124,7 +130,7 @@ pub trait ConnectionActionExt {
     fn kill_focus(&self, focus: Id) -> Res;
     /// Gets the UTF-8 name of the window (if it exists).
     /// # Errors
-    /// Returns an error if the window doesn't exist. 
+    /// Returns an error if the window doesn't exist.
     fn get_window_name(&self, window: Window) -> Result<String, ReplyOrIdError>;
     /// Creates a graphics context with a background and foreground color.
     /// # Errors
@@ -235,7 +241,7 @@ pub struct ConnectionHandler<'a, C: Connection> {
 
 impl<'a, C: Connection> ConnectionHandler<'a, C> {
     /// Creates a new handler.
-    /// 
+    ///
     /// Allocates the specified colors, grabs the specified keys, sets the default cursor and adds a heartbeat window.
     /// # Errors
     /// May return an error if the connection is faulty.
@@ -362,7 +368,7 @@ impl<C: Connection> ConnectionStateExt for ConnectionHandler<'_, C> {
 
         //set borders
         windows.iter().try_for_each(|w| {
-            if w.group == WindowGroup::Floating {
+            if w.group == WindowGroup::Fullscreen {
                 return Ok(());
             }
             self.conn.configure_window(
@@ -422,11 +428,13 @@ impl<C: Connection> ConnectionStateExt for ConnectionHandler<'_, C> {
 
     fn set_fullscreen(&self, window: &WindowState) -> Res {
         log::trace!("setting window to fullscreen {}", window.window);
-        self.config_window_from_state(window)?;
+        // self.config_window_from_state(window)?;
         self.net_set_state_fullscreen(window.window)?;
         self.conn.configure_window(
             window.frame_window,
-            &ConfigureWindowAux::new().border_width(0),
+            &ConfigureWindowAux::new()
+                .border_width(0)
+                .stack_mode(StackMode::ABOVE),
         )?;
         Ok(())
     }
@@ -482,6 +490,18 @@ impl<C: Connection> ConnectionStateExt for ConnectionHandler<'_, C> {
             0,
             window_2.width,
             window_2.height,
+        )?;
+        Ok(())
+    }
+
+    fn remove_fullscreen(&self, window: &WindowState) -> Res {
+        self.atoms
+            .remove_atom_prop(window.window, self.atoms.net_wm_state)?;
+        self.conn.configure_window(
+            window.frame_window,
+            &ConfigureWindowAux::new()
+                .stack_mode(StackMode::BELOW)
+                .border_width(self.config.border_size),
         )?;
         Ok(())
     }
@@ -744,7 +764,7 @@ impl<C: Connection> ConnectionAtomExt for ConnectionHandler<'_, C> {
 }
 
 /// Spawns a shell command with the specified arguments.
-/// 
+///
 /// May log an error if there was an issue with spawning a command.
 pub fn spawn_command(command: &str) {
     match Command::new("sh").arg("-c").arg(command).spawn() {

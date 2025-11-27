@@ -15,6 +15,8 @@ pub enum WindowGroup {
     Stack,
     /// Floating windows do not obey tiling rules and can be dragged around.
     Floating,
+    /// Fullscreen windows are maximised to the screen and hide other windows.
+    Fullscreen,
 }
 
 #[derive(Clone, Copy, PartialEq, Debug)]
@@ -37,10 +39,10 @@ pub struct WindowState {
 }
 
 impl WindowState {
-    /// Creates a new window with base dimensions (0,0,100,100). 
-    /// 
+    /// Creates a new window with base dimensions (0,0,100,100).
+    ///
     /// New windows are immediately tiled, so these base values do not matter. New windows are `Stack` by default, but this can be changed immediately by the tiling logic.
-    #[must_use] 
+    #[must_use]
     pub const fn new(window: Window, frame_window: Window) -> Self {
         Self {
             window,
@@ -63,8 +65,8 @@ impl fmt::Display for WindowState {
         )
     }
 }
-/// A virtual desktop containing windows and the id of the focused window. 
-/// 
+/// A virtual desktop containing windows and the id of the focused window.
+///
 /// Tags are numbered from 1-9, though this will be configurable in the future.
 pub struct Tag {
     /// The index of a tag.
@@ -142,7 +144,7 @@ impl fmt::Display for StateHandler {
 
 impl StateHandler {
     /// Creates a new handler.
-    /// 
+    ///
     /// Creates new empty tags and sets the active tag to be the first one.
     pub fn new(tiling: TilingInfo) -> Self {
         Self {
@@ -153,13 +155,13 @@ impl StateHandler {
     }
 
     /// Gets the active tag's currently focused window. Returns `None` if no window is focused.
-    #[must_use] 
+    #[must_use]
     pub fn get_focus(&self) -> Option<u32> {
         self.tags[self.active_tag].focus
     }
 
     /// Gets a reference to the window states of the currently active tag.
-    #[must_use] 
+    #[must_use]
     pub fn get_active_tag_windows(&self) -> &Vec<WindowState> {
         &self.tags[self.active_tag].windows
     }
@@ -170,7 +172,7 @@ impl StateHandler {
     }
 
     /// Gets a reference to the state of a window based on that window's id. Returns `None` if no window exists.
-    #[must_use] 
+    #[must_use]
     pub fn get_window_state(&self, window: Window) -> Option<&WindowState> {
         self.tags[self.active_tag]
             .windows
@@ -204,11 +206,11 @@ impl StateHandler {
     pub fn set_last_master_others_stack(&mut self) {
         self.get_mut_active_tag_windows()
             .iter_mut()
-            .filter(|w| w.group != WindowGroup::Floating)
+            .filter(|w| w.group != WindowGroup::Floating && w.group != WindowGroup::Fullscreen)
             .for_each(|w| w.group = WindowGroup::Stack);
 
         if let Some(w) = self.get_mut_active_tag_windows().last_mut() {
-            if w.group == WindowGroup::Floating {
+            if w.group == WindowGroup::Floating || w.group == WindowGroup::Fullscreen {
                 return;
             }
             w.group = WindowGroup::Master;
@@ -216,12 +218,16 @@ impl StateHandler {
     }
 
     /// Tiles the windows of a tag, changing their position and size.
-    /// 
+    ///
     /// Tiling is based around the dividing line that separates `Master` and `Stack` windows. The tiling ratio determines where this line sits.
-    /// 
+    ///
     /// The `Master` window occupies the entirety of its side of the dividing line.
-    /// 
+    ///
     /// `Stack` windows are in a "stack group", where they are positioned top to bottom according to where they are in the list. Their size depends on how many windows there are, with the whole Stack group taking the entire space of its side of the dividing line.
+    ///
+    /// `Floating` windows do not obey stacking rules are are drawn on top of all other windows (except `Fullscreen` windows).
+    ///
+    /// `Fullscreen` windows take up the entire screen and hide all other windows.
     pub fn tile_windows(&mut self) {
         log::debug!("tiling tag {}", self.active_tag);
 
@@ -262,6 +268,12 @@ impl StateHandler {
                     };
                 }
                 WindowGroup::Floating => (),
+                WindowGroup::Fullscreen => {
+                    w.x = 0;
+                    w.y = 0;
+                    w.width = max_width;
+                    w.height = max_height;
+                }
             });
     }
 
@@ -272,7 +284,7 @@ impl StateHandler {
     }
 
     /// Swaps the currently focused window with the `Master` window, changing their positions and sizes.
-    /// 
+    ///
     /// If the focused window is the `Master` window, then nothing changes.
     pub fn swap_master(&mut self) {
         let Some(focus_window) = self.tags[self.active_tag].focus else {
@@ -310,16 +322,16 @@ impl StateHandler {
             Some(self.get_active_tag_windows()[focus_index as usize].window);
     }
 
-    /// Logs the state of the manager: 
+    /// Logs the state of the manager:
     /// - non empty tags
     /// - focused windows
-    /// - mapped windows 
+    /// - mapped windows
     pub fn log_state(&self) {
         log::trace!("Manager state:\n{self}");
     }
 
     /// Gets the index of a window in the active tag based on its id.
-    /// 
+    ///
     /// Returns `None` if no such window exists.
     fn get_index_of_window(&self, window: Window) -> Option<usize> {
         self.tags[self.active_tag]
