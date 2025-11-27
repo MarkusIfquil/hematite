@@ -1,11 +1,13 @@
+//! 
+//! This module extends `x11rb`'s `Connection` trait to interact with the manager state, provide more complicated actions, and manage atoms.
 use std::process::Command;
 use std::process::exit;
 
 use x11rb::protocol::render::Color;
-use x11rb::protocol::xproto::ConnectionExt;
+use x11rb::protocol::xproto::ConnectionExt as _;
 use x11rb::protocol::xproto::Pixmap;
 use x11rb::protocol::xproto::Rectangle;
-use x11rb::wrapper::ConnectionExt as OtherConnectionExt;
+use x11rb::wrapper::ConnectionExt as _;
 use x11rb::{
     COPY_DEPTH_FROM_PARENT, CURRENT_TIME,
     connection::Connection,
@@ -29,36 +31,112 @@ use crate::{
     state::{WindowGroup, WindowState},
 };
 
+/// A shorthand for `Result<(),ReplyOrIdError`.
+///
+/// The `ReplyOrIdError` is the main error that is used when handling the X11 connection, so many functions return this type to be able to use the `?` syntax and bubble the error.
 pub type Res = Result<(), ReplyOrIdError>;
+/// An integer handle to an X11 resource.
+///
+/// The resource may be a window, pixmap, colormap, graphics context, etc. It is preferred to use the resource's unique type (e.g. `GContext` for gcs) instead.
 pub type Id = u32;
-
+/// Contains the ids of all allocated colors.
+///
+/// Currently only a main and secondary color is defined.
 pub struct Colors {
-    pub(crate) main: Id,
-    pub(crate) secondary: Id,
+    /// The main color defines the background color, predominantly used in the status bar.
+    pub main: Id,
+    /// The secondary color defines the text color used in the status bar and the border color of windows.
+    pub secondary: Id,
 }
 
+/// Defines all the ways the connection interacts with state. Usually a `WindowState` reference is passed as a shorthand for its coordinates and size.
 pub trait ConnectionStateExt {
+    /// Maps a window and its frame window to the display based on its state.
+    /// 
+    /// # Errors
+    /// Returns an error if the window does not exist.
     fn map(&self, window: &WindowState) -> Res;
+    /// Unmaps a window and its frame window from the display.
+    /// # Errors
+    /// Returns an error if the window does not exist.
     fn unmap(&self, window: &WindowState) -> Res;
+    /// Creates a frame window and reparents the window into it. Also adds `EventMask`s to the windows.
+    /// # Errors
+    /// Returns an error if the window does not exist.
     fn add_window(&self, window: &WindowState) -> Res;
-    fn destroy_window(&self, window: &WindowState) -> Res;
+    /// Destroys the frame window of a window and reparents the window to the root window, allowing it to close naturally.
+    /// # Errors
+    /// Returns an error if the frame window does not exist.
+    fn destroy_frame_window(&self, window: &WindowState) -> Res;
+    /// Creates a window from its state.
+    /// # Errors
+    /// Returns an error if the window couldn't be created.
     fn create_window(&self, window: &WindowState) -> Res;
+    /// Clears the window's contents.
+    /// # Errors
+    /// Returns an error if the window does not exist.
     fn clear_window(&self, window: &WindowState) -> Res;
+    /// Configures the window's size and position based on its state.
+    /// # Errors
+    /// Returns an error if the window does not exist or if it goes beyond the bounds of the screen.
     fn config_window_from_state(&self, window: &WindowState) -> Res;
+    /// Sets the window's size to be the entire screen and lets it know it's in fullscreen mode.
+    ///
+    /// Fullscreen windows are in the `Floating` group to avoid having them accidentally tiled.
+    /// # Errors
+    /// Returns an error if the window does not exist or if the window can't be resized.
     fn set_fullscreen(&self, window: &WindowState) -> Res;
+    /// Creates a pixmap (basically an off screen window to draw to) from its state.
+    /// # Errors
+    /// Returns an error if the window does not exist.
     fn create_pixmap_from_win(&self, pixmap: Pixmap, window: &WindowState) -> Res;
+    /// Sets the currently focused window's border to be visible and gives it the input focus.
+    /// # Errors
+    /// Returns an error if the window or its frame window does not exist.
     fn set_focus_window(&self, windows: &[WindowState], focus: &WindowState) -> Res;
+    /// Copies a window or pixmap's contents into another window.
+    ///
+    /// Only the second window's state needs to be known in order to fill the entire window. It is assumed that both windows are the same size.
+    /// # Errors
+    /// Returns an error if the graphics context or the windows do not exist.
     fn copy_window_to_window(&self, gc: Gcontext, window_1: Window, window_2: &WindowState) -> Res;
-    fn grab_keys(&self, handler: &KeyHandler) -> Res;
+    /// Configures a window based on a `ConfigureRequestEvent`.
+    /// # Errors
+    /// Returns an error if the event specifies the wrong parameters.
     fn handle_config(&self, event: ConfigureRequestEvent) -> Res;
 }
 
+/// Defines the more abstract directions you can give to the X11 server, like drawing to a pixmap or killing the focused window.
 pub trait ConnectionActionExt {
+    /// Gets the window with the input focus.
+    ///
+    /// Returns 1 if the root window has the input focus.
+    /// # Errors
+    /// Returns an error if no window focus is assigned.
     fn get_focus(&self) -> Result<u32, ReplyOrIdError>;
-    fn set_focus_to_root(&self) -> Result<(), ReplyOrIdError>;
+    /// Gives the input focus to the root window.
+    /// # Errors
+    /// Returns an error if the root window does not exist.
+    fn set_focus_to_root(&self) -> Res;
+    /// Kills the window which has the input focus.
+    /// # Errors
+    /// Returns an error if no focus window exists.
     fn kill_focus(&self, focus: Id) -> Res;
+    /// Gets the UTF-8 name of the window (if it exists).
+    /// # Errors
+    /// Returns an error if the window doesn't exist. 
     fn get_window_name(&self, window: Window) -> Result<String, ReplyOrIdError>;
+    /// Creates a graphics context with a background and foreground color.
+    /// # Errors
+    /// Returns an error if the colors dont exist.
     fn create_gc(&self, gc: Id, color_background: Id, color_foreground: Id) -> Res;
+    /// Draws to a pixmap (offscreen window).
+    ///
+    /// The graphics context does not provide any information and is used as a dummy.
+    ///
+    /// Data is a BGRA byte sequence. The length of the array must be equal to Width*Height*4.
+    /// # Errors
+    /// Returns an error if the pixmap or graphics context doesn't exist, or the data is malformed.
     fn draw_to_pixmap(
         &self,
         pixmap: Pixmap,
@@ -69,35 +147,98 @@ pub trait ConnectionActionExt {
         height: u16,
         data: &[u8],
     ) -> Res;
+    /// Sets the cursor to be the default left pointer.
+    ///
+    /// Without this the root window would display an X cursor.
+    /// # Errors
+    /// Returns an error if no default cursor exists.
     fn set_cursor(&self) -> Res;
+    /// Generates a unique id that can be used to identify any X11 resource.
+    /// # Errors
+    /// Returns an error if no ids are available.
     fn generate_id(&self) -> Result<u32, ReplyOrIdError>;
+    /// Grabs keys defined in configuration so that the event handler can later detect when they are pressed.
+    /// # Errors
+    /// Returns an error if the hotkeys are incorrect.
+    fn grab_keys(&self, handler: &KeyHandler) -> Res;
+    /// Gets the current screen's width and height in pixels.
     fn get_screen_geometry(&self) -> (u16, u16);
+    /// Gets the root window's id.
     fn get_root(&self) -> u32;
+    /// Adds a "heartbeat" window.
+    ///
+    /// Heartbeat windows act as a check that an EWMH compliant window manager is running. They do not have to be mapped and only exist to verify EWMH compliance.
+    /// # Errors
+    /// Returns an error if the heartbeat window couldn't be created.
     fn add_heartbeat_window(&self) -> Res;
+    /// Draws a rectangle to a pixmap.
+    ///
+    /// The specified graphics context determines its color.
+    /// # Errors
+    /// Returns an error if the pixmap or graphics context doesn't exist, or the rectangle is incorrect.
     fn fill_rectangle(&self, pixmap: Pixmap, gc: Gcontext, rect: Rectangle) -> Res;
 }
 
+/// Defines the methods used to change specific atoms and their data.
 pub trait ConnectionAtomExt {
+    /// Tells the window the actions it's allowed to perform.
+    ///
+    /// Currently only the fullscreen action is supported.
+    /// # Errors
+    /// Returns an error if the window doesn't exist.
     fn net_add_allowed_actions(&self, window: Window) -> Res;
+    /// Tells the window the size of its surrounding border.
+    /// # Errors
+    /// Returns an error if the window doesn't exist.
     fn net_add_frame_extents(&self, window: Window) -> Res;
+    /// Tells the window it is active and displayed.
+    /// # Errors
+    /// Returns an error if the window doesn't exist.
     fn wm_activate_window(&self, window: Window) -> Res;
+    /// Tells the window that it has the input focus.
+    /// # Errors
+    /// Returns an error if the window doesn't exist.
     fn net_set_active_window(&self, window: Window) -> Res;
+    /// Tells the window that it is in fullscreen mode.
+    /// # Errors
+    /// Returns an error if the window doesn't exist.
     fn net_set_state_fullscreen(&self, window: Window) -> Res;
+    /// Tells windows what the currently active tag is.
+    /// # Errors
+    /// Returns an error if properties can't be changed.
     fn net_update_active_desktop(&self, tag: u32) -> Res;
+    /// Tells the window what tag it's in.
+    /// # Errors
+    /// Returns an error if the window doesn't exist.
     fn net_update_window_desktop(&self, window: Window, tag: u32) -> Res;
+    /// Updates a list of which windows are managed.
+    /// # Errors
+    /// Returns an error if the windows are incorrect.
     fn net_update_client_list(&self, windows: &[Window]) -> Res;
 }
 
+/// An implementation of the Connection traits, with additional information like config, screen and atom list.
 pub struct ConnectionHandler<'a, C: Connection> {
+    /// A connection to the X11 server.
     pub conn: &'a C,
+    /// The current display.
     pub screen: &'a Screen,
+    /// The screen's id.
     screen_num: usize,
+    /// A helper to manage atoms.
     pub atoms: Atoms<'a, C>,
+    /// A config for additional information.
     config: Config,
-    pub(crate) colors: Colors,
+    /// All the ids of the managed colors.
+    pub colors: Colors,
 }
 
 impl<'a, C: Connection> ConnectionHandler<'a, C> {
+    /// Creates a new handler.
+    /// 
+    /// Allocates the specified colors, grabs the specified keys, sets the default cursor and adds a heartbeat window.
+    /// # Errors
+    /// May return an error if the connection is faulty.
     pub fn new(conn: &'a C, screen_num: usize, config: &Config) -> Result<Self, ReplyOrIdError> {
         let screen = &conn.setup().roots[screen_num];
         become_window_manager(conn, screen.root)?;
@@ -204,7 +345,7 @@ impl<C: Connection> ConnectionStateExt for ConnectionHandler<'_, C> {
         Ok(())
     }
 
-    fn destroy_window(&self, window: &WindowState) -> Res {
+    fn destroy_frame_window(&self, window: &WindowState) -> Res {
         log::trace!("destroying window: {}", window.window);
         self.conn.change_save_set(SetMode::DELETE, window.window)?;
         self.conn
@@ -344,7 +485,9 @@ impl<C: Connection> ConnectionStateExt for ConnectionHandler<'_, C> {
         )?;
         Ok(())
     }
+}
 
+impl<C: Connection> ConnectionActionExt for ConnectionHandler<'_, C> {
     fn grab_keys(&self, handler: &KeyHandler) -> Res {
         handler.hotkeys.iter().try_for_each(|h| {
             self.conn
@@ -360,9 +503,6 @@ impl<C: Connection> ConnectionStateExt for ConnectionHandler<'_, C> {
         })?;
         Ok(())
     }
-}
-
-impl<C: Connection> ConnectionActionExt for ConnectionHandler<'_, C> {
     fn get_focus(&self) -> Result<u32, ReplyOrIdError> {
         Ok(self.conn.get_input_focus()?.reply()?.focus)
     }
@@ -603,6 +743,9 @@ impl<C: Connection> ConnectionAtomExt for ConnectionHandler<'_, C> {
     }
 }
 
+/// Spawns a shell command with the specified arguments.
+/// 
+/// May log an error if there was an issue with spawning a command.
 pub fn spawn_command(command: &str) {
     match Command::new("sh").arg("-c").arg(command).spawn() {
         Ok(_) => (),
@@ -610,6 +753,7 @@ pub fn spawn_command(command: &str) {
     }
 }
 
+/// Sets the event mask of the root window, and exits if another window manager is running.
 fn become_window_manager<C: Connection>(conn: &C, root: u32) -> Res {
     let change = ChangeWindowAttributesAux::default().event_mask(
         EventMask::SUBSTRUCTURE_REDIRECT
@@ -630,6 +774,7 @@ fn become_window_manager<C: Connection>(conn: &C, root: u32) -> Res {
     Ok(())
 }
 
+/// Gets a pixel id from the specified RGB color.
 fn get_color_id<C: Connection>(
     conn: &C,
     screen: &Screen,

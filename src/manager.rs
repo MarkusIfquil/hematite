@@ -1,3 +1,8 @@
+//!
+//! Event handling and core logic module for handling X11 errors.
+//!
+//! This module is basically just for the `EventHandler` struct.
+
 use x11rb::{
     connection::Connection,
     protocol::{
@@ -12,45 +17,61 @@ use x11rb::{
 use crate::{
     bar::BarPainter,
     connection::{
-        ConnectionActionExt, ConnectionAtomExt, ConnectionHandler, ConnectionStateExt, Res,
+        ConnectionActionExt as _, ConnectionAtomExt as _, ConnectionHandler,
+        ConnectionStateExt as _, Res,
     },
     keys::{HotkeyAction, KeyHandler},
     state::{StateHandler, WindowGroup, WindowState},
 };
 
-pub struct EventHandler<'a, C: Connection> {
-    pub conn: ConnectionHandler<'a, C>,
-    pub state: StateHandler,
+/// The main struct handling events.
+/// This struct employs all the other handlers and uses their apis to change the state or do something with X11, handling all the required events for a window manager.
+pub struct EventHandler<'connection, C: Connection> {
+    /// A struct to manage the bar.
+    pub bar: &'connection BarPainter,
+    /// A struct to manage X11 related actions.
+    pub conn: ConnectionHandler<'connection, C>,
+    /// An api to help with keypresses.
     pub key: KeyHandler,
-    pub bar: &'a BarPainter,
+    /// A struct to change the state of windows.
+    pub state: StateHandler,
 }
 
 impl<C: Connection> EventHandler<'_, C> {
+    /// Handles X11 events related to managing windows.
+    /// 
+    /// Currently, only mapping, unmapping, keypresses, entering a window, configure requests and messages are handled.
+    /// 
+    /// # Errors
+    /// Any inappropriate call to the X11 server will be bubbled up by this function.
     pub fn handle_event(&mut self, event: &Event) -> Res {
         match event {
-            Event::MapRequest(e) => {
-                self.handle_map_request(*e)?;
+            Event::MapRequest(event) => {
+                self.handle_map_request(*event)?;
             }
-            Event::UnmapNotify(e) => {
-                self.handle_unmap_notify(*e)?;
+            Event::UnmapNotify(event) => {
+                self.handle_unmap_notify(*event)?;
             }
-            Event::KeyPress(e) => {
-                self.handle_keypress(*e)?;
+            Event::KeyPress(event) => {
+                self.handle_keypress(*event)?;
             }
-            Event::EnterNotify(e) => {
-                self.handle_enter(*e)?;
+            Event::EnterNotify(event) => {
+                self.handle_enter(*event)?;
             }
-            Event::ConfigureRequest(e) => {
-                self.handle_config(*e)?;
+            Event::ConfigureRequest(event) => {
+                self.handle_config(*event)?;
             }
-            Event::ClientMessage(e) => {
-                self.handle_client_message(*e)?;
+            Event::ClientMessage(event) => {
+                self.handle_client_message(*event)?;
             }
             _ => (),
         }
         Ok(())
     }
 
+    /// Handles a `MapRequestEvent`. 
+    /// 
+    /// Only maps unmapped windows. Adds the window (including frame) using a connection and adds the window to the state. Also refreshes the display.
     fn handle_map_request(&mut self, event: MapRequestEvent) -> Res {
         if self.state.get_window_state(event.window).is_some() {
             return Ok(());
@@ -70,6 +91,9 @@ impl<C: Connection> EventHandler<'_, C> {
         self.refresh()
     }
 
+    /// Handles an `UnmapNotifyEvent`. 
+    /// 
+    /// Only unmaps existing windows. Destroys the window and frame and removes it from the state. Also refreshes the display.
     fn handle_unmap_notify(&mut self, event: UnmapNotifyEvent) -> Res {
         let Some(window) = self.state.get_window_state(event.window) else {
             return Ok(());
@@ -82,7 +106,7 @@ impl<C: Connection> EventHandler<'_, C> {
             event.response_type
         );
 
-        self.conn.destroy_window(window)?;
+        self.conn.destroy_frame_window(window)?;
         self.conn.net_update_client_list(
             &self.state.tags[self.state.active_tag]
                 .windows
@@ -98,6 +122,9 @@ impl<C: Connection> EventHandler<'_, C> {
         self.refresh()
     }
 
+    /// Handles a `KeyPressEvent`. 
+    /// 
+    /// Only parses keys with valid hotkey actions. The parsed action is also handled. Also refreshes the display.
     fn handle_keypress(&mut self, event: KeyPressEvent) -> Res {
         let Some(action) = self.key.get_action(event) else {
             return Ok(());
@@ -145,6 +172,9 @@ impl<C: Connection> EventHandler<'_, C> {
         Ok(())
     }
 
+    /// Handles an `EnterNotfiyEvent`.
+    /// 
+    /// Handles enters from window to window and window to root. Also refreshes the display.
     fn handle_enter(&mut self, event: EnterNotifyEvent) -> Res {
         log::trace!(
             "EVENT ENTER child {} detail {:?} event {}",
@@ -163,6 +193,9 @@ impl<C: Connection> EventHandler<'_, C> {
         Ok(())
     }
 
+    /// Handles a `ConfigureRequestEvent`.
+    /// 
+    /// Only configures the window if it exists in the state.
     fn handle_config(&self, event: ConfigureRequestEvent) -> Res {
         if self.state.get_window_state(event.window).is_some() {
             self.conn.handle_config(event)?;
@@ -170,6 +203,11 @@ impl<C: Connection> EventHandler<'_, C> {
         Ok(())
     }
 
+    /// Handles a `ClientMessageEvent`.
+    /// 
+    /// A client message is made up of a window and message data, usually containing atoms, meant to change the appearance or behaviour of a window.
+    /// 
+    /// Currently only the fullscreen request message is handled.
     fn handle_client_message(&mut self, event: ClientMessageEvent) -> Res {
         let data = event.data.as_data32();
 
@@ -224,16 +262,27 @@ impl<C: Connection> EventHandler<'_, C> {
         Ok(())
     }
 
+    /// Refreshes the state and status bar.
+    /// 
+    /// This function does a laundry list of tasks:
+    /// - Sets the focus using the focus set in state
+    /// - Tiles windows using state
+    /// - Configures every window in a tag
+    /// - Draws the status bar
+    /// - Logs the state
     fn refresh(&mut self) -> Res {
         self.refresh_focus()?;
         self.state.refresh();
         self.config_tag()?;
         self.bar
             .draw_bar(&self.state, &self.conn, self.state.get_focus())?;
-        self.state.print_state();
+        self.state.log_state();
         Ok(())
     }
 
+    /// Refreshes the displayed focus.
+    /// 
+    /// If no window is focused the root window obtains the focus.
     fn refresh_focus(&self) -> Res {
         match self.state.tags[self.state.active_tag].focus {
             Some(w) => {
@@ -250,6 +299,9 @@ impl<C: Connection> EventHandler<'_, C> {
         Ok(())
     }
 
+    /// Switches the display from one tag to another, unmapping the old tag and mapping the new.
+    /// 
+    /// Only switching between two different tags is permitted.
     fn change_active_tag(&mut self, tag: usize) -> Res {
         if self.state.active_tag == tag {
             log::debug!("tried switching to already active tag");
@@ -263,6 +315,7 @@ impl<C: Connection> EventHandler<'_, C> {
         Ok(())
     }
 
+    /// Maps a tag's windows to the display.
     fn map_tag(&self) -> Res {
         self.state
             .get_active_tag_windows()
@@ -270,6 +323,7 @@ impl<C: Connection> EventHandler<'_, C> {
             .try_for_each(|w| self.conn.map(w))
     }
 
+    /// Unmaps a tag's windows from the display.
     fn unmap_tag(&self) -> Res {
         self.state
             .get_active_tag_windows()
@@ -277,6 +331,7 @@ impl<C: Connection> EventHandler<'_, C> {
             .try_for_each(|w| self.conn.unmap(w))
     }
 
+    /// Configures a tag's windows with their state.
     fn config_tag(&self) -> Res {
         self.state
             .get_active_tag_windows()
@@ -284,6 +339,9 @@ impl<C: Connection> EventHandler<'_, C> {
             .try_for_each(|w| self.conn.config_window_from_state(w))
     }
 
+    /// Moves the focused window from one tag to another.
+    /// 
+    /// Only moving to a different tag is permitted.
     fn move_window(&mut self, tag: usize) -> Res {
         if self.state.active_tag == tag {
             log::debug!("tried moving window to already active tag");

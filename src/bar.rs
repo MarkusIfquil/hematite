@@ -1,3 +1,5 @@
+//! 
+//! This module provides a status bar that displays tag and window information as well as status text provided by the user.
 use fontdue::Metrics;
 use x11rb::{
     errors::ReplyOrIdError,
@@ -11,19 +13,31 @@ use crate::{
     text::TextHandler,
 };
 
+/// The number of available tags.
 const TAG_COUNT: usize = 9;
 
+/// A helper for drawing the bar.
 pub struct BarPainter {
+    /// The bar as a window with state.
     pub bar: WindowState,
+    /// The base x coordinate to draw letters from.
     base_x: i16,
+    /// The base y coordinate to draw letters from.
     base_y: i16,
+    /// The pixmap associated with the bar.
     pixmap: Pixmap,
+    /// The graphics context used to draw to the bar and pixmap.
     gc: Gcontext,
+    /// A graphics context with inverted colors to draw highlighted elements.
     inverted_gc: Gcontext,
+    /// A helper for drawing text.
     text: TextHandler,
 }
 
 impl BarPainter {
+    /// Creates a new helper.
+    /// # Errors
+    /// Returns an error if the config or colors are incorrect.
     pub fn new(
         conn: &(impl ConnectionActionExt + ConnectionStateExt),
         colors: &Colors,
@@ -66,6 +80,15 @@ impl BarPainter {
         })
     }
 
+    /// Draws the entire bar in this order:
+    /// - Clears the pixmap
+    /// - Draws tag rectangles
+    /// - Draws the tag numbers
+    /// - Draws the window text
+    /// - Draws the status text
+    /// - Copies the pixmap to the bar
+    /// # Errors
+    /// Returns an error if the connection is faulty or the specified active window does not exist.
     pub fn draw_bar(
         &self,
         state: &StateHandler,
@@ -99,6 +122,11 @@ impl BarPainter {
         Ok(())
     }
 
+    /// Draws the status text to the bar.
+    /// 
+    /// The text is drawn on the right side of the bar.
+    /// # Errors
+    /// Returns an error if the status text overflows.
     pub fn draw_status_bar(&self, conn: &impl ConnectionActionExt) -> Res {
         let status_text = conn.get_window_name(conn.get_root())?;
 
@@ -118,12 +146,18 @@ impl BarPainter {
         Ok(())
     }
 
+    /// Clears the bar window of its contents and copies the pixmap's contents to it.
     fn clear_and_copy_bar(&self, conn: &impl ConnectionStateExt) -> Res {
         conn.clear_window(&self.bar)?;
         conn.copy_window_to_window(self.gc, self.pixmap, &self.bar)?;
         Ok(())
     }
 
+    /// Draws the rectangles indicating whether a tag has windows in it or not, and the active tag's rectangle
+    /// 
+    /// Indicator rectangles are smaller and occupy the top left side of the outer rectangle.
+    /// 
+    /// These rectangles are drawn on the left side of the bar.
     fn draw_rectangles(&self, state: &StateHandler, conn: &impl ConnectionActionExt) -> Res {
         let rectangles = (1..=TAG_COUNT)
             .filter(|x| *x != state.active_tag + 1 && !state.tags[x - 1].windows.is_empty())
@@ -159,6 +193,9 @@ impl BarPainter {
         Ok(())
     }
 
+    /// Draws the numbers of the tags onto the bar.
+    /// 
+    /// The active tag's number has inverted colors.
     fn draw_tag_letters(
         &self,
         conn: &impl ConnectionActionExt,
@@ -169,8 +206,8 @@ impl BarPainter {
             if x == active_tag + 1 {
                 let (metrics, data) = self.text.rasterize_letter(
                     char::from_digit(x as u32, 10).unwrap_or_default(),
-                    self.text.colors.main_color,
-                    self.text.colors.secondary_color,
+                    self.text.colors.foreground,
+                    self.text.colors.background,
                 );
                 let base_x = self.bar.height * (x as u16 - 1)
                     + (self.bar.height / 2 - (metrics.advance_width as u16 / 2));
@@ -178,8 +215,8 @@ impl BarPainter {
             } else {
                 let (metrics, data) = self.text.rasterize_letter(
                     char::from_digit(x as u32, 10).unwrap_or_default(),
-                    self.text.colors.secondary_color,
-                    self.text.colors.main_color,
+                    self.text.colors.background,
+                    self.text.colors.foreground,
                 );
                 let base_x = self.bar.height * (x as u16 - 1)
                     + (self.bar.height / 2 - (metrics.advance_width as u16 / 2));
@@ -190,6 +227,11 @@ impl BarPainter {
         Ok(())
     }
 
+    /// Draws the window's name next to the tags.
+    /// 
+    /// If on the root window or the window doesn't have a name, nothing is displayed.
+    /// 
+    /// There is a limit of 50 characters.
     fn draw_text(
         &self,
         conn: &impl ConnectionActionExt,
@@ -201,8 +243,8 @@ impl BarPainter {
         text.chars().try_for_each(|c| {
             let (metrics, data) = self.text.rasterize_letter(
                 c,
-                self.text.colors.secondary_color,
-                self.text.colors.main_color,
+                self.text.colors.background,
+                self.text.colors.foreground,
             );
             self.put_data(conn, metrics, data.as_slice(), base_x + total_width, base_y)?;
             total_width += metrics.advance_width as i16;
@@ -211,6 +253,7 @@ impl BarPainter {
         Ok(())
     }
 
+    /// Creates a rectangle representing a tag on the bar.
     const fn create_tag_rectangle(&self, x: usize) -> Rectangle {
         Rectangle {
             x: self.bar.height as i16 * (x as i16 - 1),
@@ -220,6 +263,9 @@ impl BarPainter {
         }
     }
 
+    /// Draws the specified byte array to the pixmap at the given coordinates.
+    /// # Errors
+    /// Returns an error if the metrics or data is faulty.
     pub fn put_data(
         &self,
         conn: &impl ConnectionActionExt,

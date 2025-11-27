@@ -7,13 +7,15 @@
 
 
 # why hematite?
-hematite is designed to be as simple as possible while still having the functions of a modern tiling manager.
+Hematite is designed to be as simple as possible while still having the functions of a modern tiling manager.
 
-it is **simple**, only containing ~1500 lines of code, and is only concerned about tiling windows and showing a bar.
+Hematite is based on (dwm)[https://dwm.suckless.org/], and follows many of its philosophies, while also building on it with modern tooling and documentation. 
 
-it is **fast** and **efficient**, refreshing only when necessary and contains as few moving parts as possible.
+It is **simple**, only containing ~1500 lines of code, and is only concerned about tiling windows and showing a bar.
 
-it is **opinionated**, contains no support for external scripting, with a minimal config file for appearance. it also only contains one tiling layout, which is master-stack.
+It is **fast** and **efficient**, refreshing only when necessary and contains as few moving parts as possible.
+
+It is **opinionated**, contains no support for external scripting, with a minimal config file for appearance. It also only contains one tiling layout, which is master-stack.
 # installation
 ## 1. Build from source (recommended installation)
 ### clone the repository
@@ -41,7 +43,7 @@ hematite is made to contain as few implementation dependencies (that you need to
 
 # next steps
 ## status bar
-included in the repository is a bar script. adding it to your startup script shows various status information on the bar.
+included in the repository is a bar script. adding it to your startup script displays status information on the bar.
 
 ### add to .xinitrc
 ```sh
@@ -72,9 +74,7 @@ sudo pacman -S feh
 # configuration
 configuration is set using the `config.toml` file located in your `.config/hematite` folder. A default one is provided when hematite is run for the first time.
 ## font
-for now, fonts use the base x fonts found in your font directories. For TTF fonts this is usually `/usr/share/fonts/TTF`. 
-
-if a font is not recognized make sure that you're using the correct name format (e.g. `-misc-jetbrainsmononl nfp medium-medium-r-normal--20-0-0-0-p-0-iso8859-16`), and that X sees your font directory by containing a `fonts.dir` file.
+A font path must be provided in the configuration file. For TTF fonts this is usually `/usr/share/fonts/TTF/{font_name}.ttf`.
 ## hotkeys
 not all keys are supported by default. If you want to use a non-character key then you will have to add it manually in the code.
 

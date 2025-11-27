@@ -1,41 +1,73 @@
+//! 
+//! This module provides a helper for managing keypresses, allowing easy conversion between keycodes and keysyms.
+//! `HotkeyAction`s force hotkeys to only implement the provided functions.
 use std::collections::HashMap;
 
 use serde::{Deserialize, Serialize};
 use x11rb::{
     connection::Connection,
     errors::ReplyOrIdError,
-    protocol::xproto::{ConnectionExt, KeyButMask, KeyPressEvent, ModMask},
+    protocol::xproto::{ConnectionExt as _, KeyButMask, KeyPressEvent, ModMask},
 };
 use xkeysym::{KeyCode, Keysym};
 
 use crate::config::Config;
 #[derive(Debug, Clone, Serialize, Deserialize)]
+/// The possible actions a hotkey could activate.
 pub enum HotkeyAction {
+    /// Spawns the specified command.
     Spawn(String),
+    /// Closes the currently focused window (if it exists).
     ExitFocusedWindow,
+    /// Switches the active tag to the specified one.
     SwitchTag(usize),
+    /// Moves the currently focused window to the specified tag.
     MoveWindow(usize),
+    /// Changes the ratio between the `Master` and `Stack` groups by the specified amount.
     ChangeRatio(f32),
+    /// Changes the window focus by the specified change.
     NextFocus(i16),
+    /// Changes the active tag by the specified change.
     NextTag(i16),
+    /// Swaps the focused window with the `Master` window.
     SwapMaster,
 }
 
 #[derive(Debug)]
+/// Represents a hotkey.
 pub struct Hotkey {
-    _sym: Keysym,
-    mask: KeyButMask,
+    /// The action a hotkey should activate
     action: HotkeyAction,
+    /// This represents the codes of the pressed modifier buttons (e.g. CONTROL or SHIFT)
+    mask: KeyButMask,
+    /// The number associated with the key
     pub code: KeyCode,
+    /// A key's internal name (e.g. `XK_ENTER`)
+    _sym: Keysym,
+    /// Contains the various pressed modifier buttons
     pub modifier: ModMask,
 }
 
+/// A helper for managing keypresses.
 pub struct KeyHandler {
-    pub _sym_code: HashMap<Keysym, KeyCode>,
+    /// A list of monitored hotkeys.
     pub hotkeys: Vec<Hotkey>,
+    /// A map of keysyms and their respective keycodes. 
+    _sym_code: HashMap<Keysym, KeyCode>,
 }
 
 impl KeyHandler {
+    /// Creates a new handler.
+    /// 
+    /// A keyboard map is created based on the minimum and maximum keycodes, with keysyms being created with the xkeysym crate.
+    /// 
+    /// The hotkeys defined in the config file are grabbed and stored.
+    /// 
+    /// # Errors
+    /// May return an error if the hotkeys are invalid.
+    /// 
+    /// # Panics
+    /// 
     pub fn new(conn: &impl Connection, config: &Config) -> Result<Self, ReplyOrIdError> {
         //get min-max code
         let min = conn.setup().min_keycode;
@@ -111,12 +143,15 @@ impl KeyHandler {
         })
     }
 
+    /// Gets a hotkey based on its mask and code.
     fn get_registered_hotkey(&self, mask: KeyButMask, code_raw: u32) -> Option<&Hotkey> {
         self.hotkeys
             .iter()
             .find(|h| mask == h.mask && code_raw == h.code.raw())
     }
 
+    /// Gets the hotkey and its associated action based on a `KeyPressEvent`.
+    #[must_use] 
     pub fn get_action(&self, event: KeyPressEvent) -> Option<HotkeyAction> {
         self.get_registered_hotkey(event.state, u32::from(event.detail))
             .map(|h| h.action.clone())

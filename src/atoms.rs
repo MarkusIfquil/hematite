@@ -1,40 +1,68 @@
+//!
+//! This module provides a helper for the mess that is X11 atom handling.
 use std::collections::HashMap;
 
 use x11rb::{
     connection::Connection,
     errors::ReplyOrIdError,
-    protocol::xproto::{Atom, AtomEnum, ConnectionExt, PropMode, Screen, Window},
+    protocol::xproto::{Atom, AtomEnum, ConnectionExt as _, PropMode, Screen, Window},
     wrapper::ConnectionExt as _,
 };
 
 use crate::connection::Res;
-
+/// A helper for managing atoms.
+///
+/// Atoms are integers defined by the X11 server or by the window manager, and act as shared names and types for clients to communicate between each other and the server.
 pub struct Atoms<'a, C> {
+    /// A connection to the X11 server.
     conn: &'a C,
+    /// This atom lists the other supported atoms.
     pub net_supported: Atom,
+    /// This atom lists the managed clients.
     pub net_client_list: Atom,
+    /// This atom lists the number of desktops.
     pub net_number_of_desktops: Atom,
+    /// This is set to the screen's geometry.
     pub net_desktop_geometry: Atom,
+    /// This is set to the screen's geometry.
     pub net_desktop_viewport: Atom,
+    /// The current active tag.
     pub net_current_desktop: Atom,
+    /// The window that has the input focus.
     pub net_active_window: Atom,
+    /// The workarea a window can be in.
     pub net_workarea: Atom,
+    /// The id of the heartbeat window.
     pub net_supporting_wm_check: Atom,
+    /// The border width of the window.
     pub net_frame_extents: Atom,
+    /// The name of the window.
     pub net_wm_name: Atom,
+    /// The current tag of the window.
     pub net_wm_desktop: Atom,
+    /// The state (fullscreen) of the window.
     pub net_wm_state: Atom,
+    /// The fullscreen state of the window.
     pub net_wm_state_fullscreen: Atom,
+    /// A list of atoms representing the allowed actions of a window.
     pub net_wm_allowed_actions: Atom,
+    /// The fullscreen action.
     pub net_wm_action_fullscreen: Atom,
+    /// Represents the utf8 type.
     pub utf8_string: Atom,
+    /// A list of the supported manager protocols.
     pub wm_protocols: Atom,
+    /// The state (active, hidden) of the window.
     pub wm_state: Atom,
+    /// The window deletion protocol.
     pub wm_delete_window: Atom,
 }
 
 impl<'a, C: Connection> Atoms<'a, C> {
-    pub fn new(conn: &'a C, screen: &Screen) -> Result<Self,ReplyOrIdError> {
+    /// Creates a new atom helper.
+    /// # Errors
+    /// May return an error if the atoms are incorrect.
+    pub fn new(conn: &'a C, screen: &Screen) -> Result<Self, ReplyOrIdError> {
         let atom_strings = vec![
             "_NET_SUPPORTED",
             "_NET_CLIENT_LIST",
@@ -91,14 +119,24 @@ impl<'a, C: Connection> Atoms<'a, C> {
             wm_state: atoms["WM_STATE"],
             wm_delete_window: atoms["WM_DELETE_WINDOW"],
         };
-        new_self.setup_atoms(screen,&atom_nums)?;
+        new_self.setup_atoms(screen, &atom_nums)?;
         Ok(new_self)
     }
+
+    /// Gets the name of an atom if it's defined.
+    ///
+    /// # Errors
+    /// If the string is partly invalid, the default character is used.
+    /// 
+    /// If there is no atom by that name then a `ReplyOrIdError` is thrown.
     pub fn get_atom_name(&self, atom: Atom) -> Result<String, ReplyOrIdError> {
-        String::from_utf8(self.conn.get_atom_name(atom)?.reply()?.name)
-            .map_or_else(|_| Ok(String::new()), Ok)
+        Ok(String::from_utf8_lossy(&self.conn.get_atom_name(atom)?.reply()?.name).to_string())
     }
 
+    /// Sets up the root window's properties.
+    /// 
+    /// # Errors
+    /// May return an error if the data is malformed.
     pub fn setup_atoms(&self, screen: &Screen, atom_nums: &[Atom]) -> Res {
         self.change_atom_prop(screen.root, self.net_supported, atom_nums)?;
         self.change_cardinal_prop(screen.root, self.net_number_of_desktops, &[9])?;
@@ -123,6 +161,11 @@ impl<'a, C: Connection> Atoms<'a, C> {
         )?;
         Ok(())
     }
+
+    /// Changes a window's atom property to the specified data.
+    /// 
+    /// # Errors
+    /// May return an error if the data is malformed or has an inappropriate size, or if the atom or window is missing.
     pub fn change_atom_prop(&self, window: Window, property: Atom, data: &[u32]) -> Res {
         self.conn
             .change_property32(PropMode::REPLACE, window, property, AtomEnum::ATOM, data)?
@@ -130,12 +173,19 @@ impl<'a, C: Connection> Atoms<'a, C> {
         Ok(())
     }
 
+    /// Changes a window's window property to the specified data.
+    /// 
+    /// # Errors
+    /// May return an error if the data is malformed or has an inappropriate size, or if the atom or window is missing.
     pub fn change_window_prop(&self, window: Window, property: Atom, data: &[u32]) -> Res {
         self.conn
             .change_property32(PropMode::REPLACE, window, property, AtomEnum::WINDOW, data)?;
         Ok(())
     }
 
+    /// Changes a window's integer property to the specified data.
+    /// # Errors
+    /// May return an error if the data is malformed or has an inappropriate size, or if the atom or window is missing.
     pub fn change_cardinal_prop(&self, window: Window, property: Atom, data: &[u32]) -> Res {
         self.conn.change_property32(
             PropMode::REPLACE,
@@ -147,17 +197,30 @@ impl<'a, C: Connection> Atoms<'a, C> {
         Ok(())
     }
 
+    /// Changes a window's string property to the specified data.
+    /// # Errors
+    /// May return an error if the data is malformed or has an inappropriate size, or if the atom or window is missing.
     pub fn change_string_prop(&self, window: Window, property: Atom, data: &str) -> Res {
-        self.conn.change_property8(PropMode::REPLACE, window, property, AtomEnum::STRING, data.as_bytes())?;
+        self.conn.change_property8(
+            PropMode::REPLACE,
+            window,
+            property,
+            AtomEnum::STRING,
+            data.as_bytes(),
+        )?;
         Ok(())
     }
 
+    /// Removes the data from a window's property.
+    /// # Errors
+    /// May return an error if the atom or window is missing.
     pub fn remove_atom_prop(&self, window: Window, property: Atom) -> Res {
         self.change_atom_prop(window, property, &[0])?;
         Ok(())
     }
 }
 
+/// Gets the specified atoms based on their name.
 fn get_atom_mapping(atom_strings: &[&str], atom_nums: &[u32]) -> HashMap<String, u32> {
     let mut atoms: HashMap<String, u32> = HashMap::new();
     atom_strings
@@ -170,6 +233,7 @@ fn get_atom_mapping(atom_strings: &[&str], atom_nums: &[u32]) -> HashMap<String,
     atoms
 }
 
+/// Gets an atom based on its name.
 fn get_atom_nums<C: Connection>(conn: &C, atom_strings: &[&str]) -> std::vec::Vec<u32> {
     atom_strings
         .iter()
