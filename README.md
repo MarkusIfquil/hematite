@@ -1,8 +1,8 @@
 <div align="center">
   <h1>hematite: a simple, fast, opinionated X tiling window manager.</h1>
-  <img src="https://github.com/MarkusIfquil/hematite/blob/main/images/hematite.png?raw=true"/>
-  <p></p>
   <img src="https://github.com/MarkusIfquil/hematite/blob/main/images/hematite2.png?raw=true"/>
+  <p></p>
+  <img src="https://github.com/MarkusIfquil/hematite/blob/main/images/hematite1.png?raw=true"/>
 </div>
 
 
