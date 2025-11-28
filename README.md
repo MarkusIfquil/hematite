@@ -9,7 +9,7 @@
 # why hematite?
 Hematite is designed to be as simple as possible while still having the functions of a modern tiling manager.
 
-Hematite is based on (dwm)[https://dwm.suckless.org/], and follows many of its philosophies, while also building on it with modern tooling and documentation. 
+Hematite is based on [dwm](https://dwm.suckless.org/), and follows many of its philosophies, while also building on it with modern tooling and documentation. 
 
 It is **simple**, only containing ~1500 lines of code, and is only concerned about tiling windows and showing a bar.
 
@@ -74,7 +74,7 @@ sudo pacman -S feh
 # configuration
 configuration is set using the `config.toml` file located in your `.config/hematite` folder. A default one is provided when hematite is run for the first time.
 ## font
-A font path must be provided in the configuration file. For TTF fonts this is usually `/usr/share/fonts/TTF/{font_name}.ttf`.
+FreeSans is used by default due to compatibility, but it is recommended to change it to a different font (for example [Jetbrains Mono Nerd](https://www.nerdfonts.com/). For TTF fonts the install path is usually `/usr/share/fonts/TTF/{font_name}.ttf`.
 ## hotkeys
 not all keys are supported by default. If you want to use a non-character key then you will have to add it manually in the code.
 
