@@ -15,29 +15,29 @@ language() {
 
 wlan() {
 	case "$(cat /sys/class/net/wl*/operstate 2>/dev/null)" in
-	up) printf "C" ;;
-	down) printf "DC" ;;
+	up) printf "󰤨" ;;
+	down) printf "󰤭" ;;
 	esac
 }
 
 mem() {
-  printf "M $(free -h | awk '/^Mem/ { print $3 }' | sed s/i//g)"
+  printf " $(free -h | awk '/^Mem/ { print $3 }' | sed s/i//g)"
 }
 
 brightness() {
-  printf "L %.0f%%\n" $(light)
+  printf " %.0f%%\n" $(light)
 }
 
 audio() {
-  printf "A %s\n" $(pactl get-sink-volume 0 | awk '{print $5}')
+  printf " %s\n" $(pactl get-sink-volume 0 | awk '{print $5}')
 }
 
 battery() {
-  printf "B $(cat /sys/class/power_supply/BAT0/capacity)%%"
+  printf " $(cat /sys/class/power_supply/BAT0/capacity)%%"
 }
 
 clock() {
-	printf "T $(date '+%Y, %b %d. %a, %H:%M:%S')"
+	printf "󱑆 $(date '+%Y, %b %d. %a, %H:%M:%S')"
 }
 
 while true; do
