@@ -221,6 +221,10 @@ pub trait ConnectionAtomExt {
     /// # Errors
     /// Returns an error if the windows are incorrect.
     fn net_update_client_list(&self, windows: &[Window]) -> Res;
+    /// Gets the icon data of the window.
+    /// # Errors
+    /// Returns an error if the window doesn't exist.
+    fn get_icon(&self, window: Window) -> Result<Vec<u8>,ReplyOrIdError>;
 }
 
 /// An implementation of the Connection traits, with additional information like config, screen and atom list.
@@ -760,6 +764,10 @@ impl<C: Connection> ConnectionAtomExt for ConnectionHandler<'_, C> {
             &[self.atoms.net_wm_state_fullscreen],
         )?;
         Ok(())
+    }
+    
+    fn get_icon(&self, window: Window) -> Result<Vec<u8>,ReplyOrIdError> {
+        self.atoms.get_property(window, self.atoms.net_wm_icon, AtomEnum::CARDINAL)
     }
 }
 

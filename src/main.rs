@@ -47,8 +47,8 @@ pub mod manager;
 pub mod keys;
 /// State management of windows and desktops.
 pub mod state;
-/// Font rendering.
-pub mod text;
+/// Font and image rendering.
+pub mod render;
 use crate::{
     bar::BarPainter,
     config::{Config, ConfigDeserialized},
@@ -78,7 +78,7 @@ pub fn main() -> Result<(), Box<dyn Error>> {
     let (conn, screen_num) = x11rb::connect(None)?;
     let config = Config::from(ConfigDeserialized::new());
     let conn_handler = ConnectionHandler::new(&conn, screen_num, &config)?;
-    let bar = BarPainter::new(&conn_handler, &conn_handler.colors, &config)?;
+    let mut bar = BarPainter::new(&conn_handler, &conn_handler.colors, &config)?;
     let keys = KeyHandler::new(&conn, &config)?;
     let state = StateHandler::new(TilingInfo {
         gap: config.spacing as u16,
@@ -94,7 +94,7 @@ pub fn main() -> Result<(), Box<dyn Error>> {
         conn: conn_handler,
         state,
         key: keys,
-        bar: &bar,
+        bar,
     };
 
     let (tx, rx) = mpsc::channel();
@@ -112,13 +112,7 @@ pub fn main() -> Result<(), Box<dyn Error>> {
 
     loop {
         if rx.try_recv().is_ok() {
-            if let Err(error) = bar.draw_bar(
-                &event_handler.state,
-                &event_handler.conn,
-                event_handler.state.get_focus(),
-            ) {
-                log::error!("{error}");
-            }
+            event_handler.draw_bar();
         }
         conn.flush()?;
         let mut potential_event = Some(conn.wait_for_event()?);

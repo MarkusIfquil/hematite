@@ -28,7 +28,7 @@ use crate::{
 /// This struct employs all the other handlers and uses their apis to change the state or do something with X11, handling all the required events for a window manager.
 pub struct EventHandler<'connection, C: Connection> {
     /// A struct to manage the bar.
-    pub bar: &'connection BarPainter,
+    pub bar: BarPainter,
     /// A struct to manage X11 related actions.
     pub conn: ConnectionHandler<'connection, C>,
     /// An api to help with keypresses.
@@ -115,9 +115,11 @@ impl<C: Connection> EventHandler<'_, C> {
                 .collect::<Vec<u32>>(),
         )?;
 
+        self.bar.icons.remove(&window.window);
         self.state
             .get_mut_active_tag_windows()
             .retain(|w| w.window != event.window);
+
         self.state.set_tag_focus_to_master();
         self.refresh()
     }
@@ -270,8 +272,7 @@ impl<C: Connection> EventHandler<'_, C> {
         self.refresh_focus()?;
         self.state.refresh();
         self.config_tag()?;
-        self.bar
-            .draw_bar(&self.state, &self.conn, self.state.get_focus())?;
+        self.draw_bar();
         self.state.log_state();
         Ok(())
     }
@@ -363,5 +364,14 @@ impl<C: Connection> EventHandler<'_, C> {
             .net_update_window_desktop(focus_window, self.state.active_tag as u32)?;
 
         Ok(())
+    }
+
+    pub fn draw_bar(&mut self) {
+        if let Err(error) = self
+            .bar
+            .draw_bar(&self.state, &self.conn, self.state.get_focus())
+        {
+            log::error!("{error}");
+        }
     }
 }

@@ -1,6 +1,6 @@
 //!
 //! This module provides a helper for the mess that is X11 atom handling.
-use std::collections::HashMap;
+use std::{collections::HashMap};
 
 use x11rb::{
     connection::Connection,
@@ -48,6 +48,8 @@ pub struct Atoms<'a, C> {
     pub net_wm_allowed_actions: Atom,
     /// The fullscreen action.
     pub net_wm_action_fullscreen: Atom,
+    /// An icon representing the window.
+    pub net_wm_icon: Atom,
     /// Represents the utf8 type.
     pub utf8_string: Atom,
     /// A list of the supported manager protocols.
@@ -86,6 +88,7 @@ impl<'a, C: Connection> Atoms<'a, C> {
             "_NET_WM_ALLOWED_ACTIONS",
             "_NET_WM_ACTION_FULLSCREEN",
             "_NET_WM_USER_TIME",
+            "_NET_WM_ICON",
             "UTF8_STRING",
             "WM_NAME",
             "WM_PROTOCOLS",
@@ -114,6 +117,7 @@ impl<'a, C: Connection> Atoms<'a, C> {
             net_wm_state_fullscreen: atoms["_NET_WM_STATE_FULLSCREEN"],
             net_wm_allowed_actions: atoms["_NET_WM_ALLOWED_ACTIONS"],
             net_wm_action_fullscreen: atoms["_NET_WM_ACTION_FULLSCREEN"],
+            net_wm_icon: atoms["_NET_WM_ICON"],
             utf8_string: atoms["UTF8_STRING"],
             wm_protocols: atoms["WM_PROTOCOLS"],
             wm_state: atoms["WM_STATE"],
@@ -127,14 +131,14 @@ impl<'a, C: Connection> Atoms<'a, C> {
     ///
     /// # Errors
     /// If the string is partly invalid, the default character is used.
-    /// 
+    ///
     /// If there is no atom by that name then a `ReplyOrIdError` is thrown.
     pub fn get_atom_name(&self, atom: Atom) -> Result<String, ReplyOrIdError> {
         Ok(String::from_utf8_lossy(&self.conn.get_atom_name(atom)?.reply()?.name).to_string())
     }
 
     /// Sets up the root window's properties.
-    /// 
+    ///
     /// # Errors
     /// May return an error if the data is malformed.
     pub fn setup_atoms(&self, screen: &Screen, atom_nums: &[Atom]) -> Res {
@@ -163,7 +167,7 @@ impl<'a, C: Connection> Atoms<'a, C> {
     }
 
     /// Changes a window's atom property to the specified data.
-    /// 
+    ///
     /// # Errors
     /// May return an error if the data is malformed or has an inappropriate size, or if the atom or window is missing.
     pub fn change_atom_prop(&self, window: Window, property: Atom, data: &[u32]) -> Res {
@@ -174,7 +178,7 @@ impl<'a, C: Connection> Atoms<'a, C> {
     }
 
     /// Changes a window's window property to the specified data.
-    /// 
+    ///
     /// # Errors
     /// May return an error if the data is malformed or has an inappropriate size, or if the atom or window is missing.
     pub fn change_window_prop(&self, window: Window, property: Atom, data: &[u32]) -> Res {
@@ -217,6 +221,22 @@ impl<'a, C: Connection> Atoms<'a, C> {
     pub fn remove_atom_prop(&self, window: Window, property: Atom) -> Res {
         self.change_atom_prop(window, property, &[0])?;
         Ok(())
+    }
+
+    /// Gets the specified property's data.
+    /// # Errors
+    /// Returns an error if the property or window is missing.
+    pub fn get_property(
+        &self,
+        window: Window,
+        property: Atom,
+        prop_type: AtomEnum,
+    ) -> Result<Vec<u8>, ReplyOrIdError> {
+        Ok(self
+            .conn
+            .get_property(false, window, property, prop_type, 0, u32::MAX)?
+            .reply()?
+            .value)
     }
 }
 

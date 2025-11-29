@@ -29,6 +29,8 @@ pub const SECONDARY_COLOR: Color = Color {
 }; // #74c7ec
 /// The default font.
 pub const FONT: &str = "/usr/share/fonts/gnu-free/FreeSans.otf";
+/// The default font size.
+pub const FONT_SIZE:u32 = 12;
 
 /// A map between a regular RGBA color and X11's color format
 fn hex_color_to_argb(hex: &str) -> Result<Color, ParseIntError> {
@@ -321,7 +323,7 @@ impl Default for ConfigDeserialized {
             },
             font: Font {
                 path: FONT.to_owned(),
-                size: 12,
+                size: FONT_SIZE,
             },
             hotkeys,
         }

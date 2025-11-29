@@ -1,6 +1,9 @@
-//! 
+//!
 //! This module provides a status bar that displays tag and window information as well as status text provided by the user.
+use std::collections::HashMap;
+
 use fontdue::Metrics;
+use image::{ImageBuffer, Rgba, imageops};
 use x11rb::{
     errors::ReplyOrIdError,
     protocol::xproto::{Gcontext, Pixmap, Rectangle, Window},
@@ -8,10 +11,20 @@ use x11rb::{
 
 use crate::{
     config::Config,
-    connection::{Colors, ConnectionActionExt, ConnectionStateExt, Res},
+    connection::{Colors, ConnectionActionExt, ConnectionAtomExt, ConnectionStateExt, Res},
     state::{StateHandler, WindowGroup, WindowState},
-    text::TextHandler,
+    render::TextHandler,
 };
+
+/// A window icon.
+pub struct Icon {
+    /// The width of the icon.
+    width: u32,
+    /// The height of the icon.
+    height: u32,
+    /// The bytes (in ARGB) of the image.
+    data: Vec<u8>,
+}
 
 /// The number of available tags.
 const TAG_COUNT: usize = 9;
@@ -32,6 +45,8 @@ pub struct BarPainter {
     inverted_gc: Gcontext,
     /// A helper for drawing text.
     text: TextHandler,
+    /// A cache for icons.
+    pub icons: HashMap<Window, Icon>,
 }
 
 impl BarPainter {
@@ -77,6 +92,7 @@ impl BarPainter {
             gc,
             inverted_gc,
             text,
+            icons: HashMap::default(),
         })
     }
 
@@ -84,15 +100,16 @@ impl BarPainter {
     /// - Clears the pixmap
     /// - Draws tag rectangles
     /// - Draws the tag numbers
+    /// - Draws the window icon (if it exists)
     /// - Draws the window text
     /// - Draws the status text
     /// - Copies the pixmap to the bar
     /// # Errors
     /// Returns an error if the connection is faulty or the specified active window does not exist.
     pub fn draw_bar(
-        &self,
+        &mut self,
         state: &StateHandler,
-        conn: &(impl ConnectionActionExt + ConnectionStateExt),
+        conn: &(impl ConnectionActionExt + ConnectionStateExt + ConnectionAtomExt),
         active_window: Option<Window>,
     ) -> Res {
         let bar_text: String = match active_window {
@@ -116,18 +133,69 @@ impl BarPainter {
         )?;
         self.draw_rectangles(state, conn)?;
         self.draw_tag_letters(conn, state.active_tag, self.base_y)?;
-        self.draw_text(conn, &bar_text, self.base_x, self.base_y)?;
+        if let Some(window) = active_window {
+            self.draw_icon(conn, window)?;
+        }
+        self.draw_text(conn, &bar_text, self.base_x + 16, self.base_y)?;
         self.draw_status_bar(conn)?;
         self.clear_and_copy_bar(conn)?;
         Ok(())
     }
 
+    /// Draws the window icon to the bar.
+    fn draw_icon(
+        &mut self,
+        conn: &(impl ConnectionActionExt + ConnectionAtomExt),
+        window: Window,
+    ) -> Res {
+        let icon = if let Some(icon) = self.icons.get(&window) {
+            icon
+        } else {
+            let icon_with_dimensions = conn.get_icon(window)?;
+            if icon_with_dimensions.is_empty() {
+                return Ok(());
+            }
+            let width = u32::from_ne_bytes(icon_with_dimensions[0..4].try_into().unwrap());
+            let height = u32::from_ne_bytes(icon_with_dimensions[4..8].try_into().unwrap());
+            let ratio = height as f32 / self.text.metrics.height as f32;
+
+            let buff =
+                ImageBuffer::<Rgba<u8>, _>::from_raw(width, height, icon_with_dimensions).unwrap();
+
+            let width = (width as f32 / ratio).round() as u32;
+            let height = (height as f32 / ratio).round() as u32;
+
+            let icon = Icon {
+                width,
+                height,
+                data: crate::render::blend_image_with_background(
+                    &imageops::resize(&buff, width, height, imageops::FilterType::Lanczos3),
+                    self.text.colors.foreground,
+                ),
+            };
+
+            self.icons.insert(window, icon);
+            self.icons.get(&window).unwrap()
+        };
+
+        conn.draw_to_pixmap(
+            self.pixmap,
+            self.gc,
+            self.base_x - icon.width as i16 / 2,
+            self.bar.height as i16 / 2 - icon.height as i16 / 2,
+            icon.width as u16,
+            icon.height as u16,
+            &icon.data,
+        )?;
+        Ok(())
+    }
+
     /// Draws the status text to the bar.
-    /// 
+    ///
     /// The text is drawn on the right side of the bar.
     /// # Errors
     /// Returns an error if the status text overflows.
-    pub fn draw_status_bar(&self, conn: &impl ConnectionActionExt) -> Res {
+    fn draw_status_bar(&self, conn: &impl ConnectionActionExt) -> Res {
         let status_text = conn.get_window_name(conn.get_root())?;
 
         log::trace!("drawing root windows name on bar with text: {status_text}");
@@ -154,9 +222,9 @@ impl BarPainter {
     }
 
     /// Draws the rectangles indicating whether a tag has windows in it or not, and the active tag's rectangle
-    /// 
+    ///
     /// Indicator rectangles are smaller and occupy the top left side of the outer rectangle.
-    /// 
+    ///
     /// These rectangles are drawn on the left side of the bar.
     fn draw_rectangles(&self, state: &StateHandler, conn: &impl ConnectionActionExt) -> Res {
         let rectangles = (1..=TAG_COUNT)
@@ -194,7 +262,7 @@ impl BarPainter {
     }
 
     /// Draws the numbers of the tags onto the bar.
-    /// 
+    ///
     /// The active tag's number has inverted colors.
     fn draw_tag_letters(
         &self,
@@ -211,7 +279,7 @@ impl BarPainter {
                 );
                 let base_x = self.bar.height * (x as u16 - 1)
                     + (self.bar.height / 2 - (metrics.advance_width as u16 / 2));
-                self.put_data(conn, metrics, data.as_slice(), base_x as i16, base_y)?;
+                self.put_text_data(conn, metrics, data.as_slice(), base_x as i16, base_y)?;
             } else {
                 let (metrics, data) = self.text.rasterize_letter(
                     char::from_digit(x as u32, 10).unwrap_or_default(),
@@ -220,7 +288,7 @@ impl BarPainter {
                 );
                 let base_x = self.bar.height * (x as u16 - 1)
                     + (self.bar.height / 2 - (metrics.advance_width as u16 / 2));
-                self.put_data(conn, metrics, data.as_slice(), base_x as i16, base_y)?;
+                self.put_text_data(conn, metrics, data.as_slice(), base_x as i16, base_y)?;
             }
             Ok::<(), ReplyOrIdError>(())
         })?;
@@ -228,9 +296,9 @@ impl BarPainter {
     }
 
     /// Draws the window's name next to the tags.
-    /// 
+    ///
     /// If on the root window or the window doesn't have a name, nothing is displayed.
-    /// 
+    ///
     /// There is a limit of 50 characters.
     fn draw_text(
         &self,
@@ -246,7 +314,7 @@ impl BarPainter {
                 self.text.colors.background,
                 self.text.colors.foreground,
             );
-            self.put_data(conn, metrics, data.as_slice(), base_x + total_width, base_y)?;
+            self.put_text_data(conn, metrics, data.as_slice(), base_x + total_width, base_y)?;
             total_width += metrics.advance_width as i16;
             Ok::<(), ReplyOrIdError>(())
         })?;
@@ -266,7 +334,7 @@ impl BarPainter {
     /// Draws the specified byte array to the pixmap at the given coordinates.
     /// # Errors
     /// Returns an error if the metrics or data is faulty.
-    pub fn put_data(
+    fn put_text_data(
         &self,
         conn: &impl ConnectionActionExt,
         metrics: Metrics,
