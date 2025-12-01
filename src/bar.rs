@@ -3,7 +3,6 @@
 use std::collections::HashMap;
 
 use fontdue::Metrics;
-use image::{ImageBuffer, Rgba, imageops};
 use x11rb::{
     errors::ReplyOrIdError,
     protocol::xproto::{Gcontext, Pixmap, Rectangle, Window},
@@ -12,22 +11,37 @@ use x11rb::{
 use crate::{
     config::Config,
     connection::{Colors, ConnectionActionExt, ConnectionAtomExt, ConnectionStateExt, Res},
-    state::{StateHandler, WindowGroup, WindowState},
-    render::TextHandler,
+    render::{Image, TextHandler},
+    state::{WindowGroup, WindowState},
 };
-
-/// A window icon.
-pub struct Icon {
-    /// The width of the icon.
-    width: u32,
-    /// The height of the icon.
-    height: u32,
-    /// The bytes (in ARGB) of the image.
-    data: Vec<u8>,
-}
 
 /// The number of available tags.
 const TAG_COUNT: usize = 9;
+
+/// A cache for the left side of the bar to minimize redraws.
+pub struct Cache {
+    /// Icons pertaining to specific windows.
+    pub icons: HashMap<Window, Image>,
+    /// Window names pertaining to specific windows.
+    ///
+    /// Names still have to be asked to see if they are updated, but the draw call can be avoided.
+    pub names: HashMap<Window, String>,
+    /// The actively used tag.
+    active_tag: usize,
+    /// The tags which have a window in them, represented as a bitmask.
+    used_tags: u16,
+}
+
+impl Default for Cache {
+    fn default() -> Self {
+        Self {
+            icons: HashMap::default(),
+            names: HashMap::default(),
+            active_tag: usize::MAX,
+            used_tags: Default::default(),
+        }
+    }
+}
 
 /// A helper for drawing the bar.
 pub struct BarPainter {
@@ -45,8 +59,8 @@ pub struct BarPainter {
     inverted_gc: Gcontext,
     /// A helper for drawing text.
     text: TextHandler,
-    /// A cache for icons.
-    pub icons: HashMap<Window, Icon>,
+    /// A cache for reducing draw calls.
+    pub cache: Cache,
 }
 
 impl BarPainter {
@@ -92,7 +106,7 @@ impl BarPainter {
             gc,
             inverted_gc,
             text,
-            icons: HashMap::default(),
+            cache: Cache::default(),
         })
     }
 
@@ -108,74 +122,113 @@ impl BarPainter {
     /// Returns an error if the connection is faulty or the specified active window does not exist.
     pub fn draw_bar(
         &mut self,
-        state: &StateHandler,
+        active_tag: usize,
+        tag_bitmask: u16,
         conn: &(impl ConnectionActionExt + ConnectionStateExt + ConnectionAtomExt),
         active_window: Option<Window>,
     ) -> Res {
-        let bar_text: String = match active_window {
-            Some(w) => conn.get_window_name(w)?,
-            None => String::new(),
-        }
-        .chars()
-        .take(50)
-        .collect();
-        log::trace!("drawing bar with text: {bar_text}");
+        if self.cache.active_tag != active_tag || self.cache.used_tags != tag_bitmask {
+            conn.fill_rectangle(
+                self.pixmap,
+                self.inverted_gc,
+                Rectangle {
+                    x: 0,
+                    y: 0,
+                    width: self.bar.height * TAG_COUNT as u16,
+                    height: self.bar.height,
+                },
+            )?;
 
-        conn.fill_rectangle(
-            self.pixmap,
-            self.inverted_gc,
-            Rectangle {
-                x: 0,
-                y: 0,
-                width: self.bar.width,
-                height: self.bar.height,
-            },
-        )?;
-        self.draw_rectangles(state, conn)?;
-        self.draw_tag_letters(conn, state.active_tag, self.base_y)?;
-        if let Some(window) = active_window {
-            self.draw_icon(conn, window)?;
+            self.draw_rectangles(active_tag, tag_bitmask, conn)?;
+            self.draw_tag_letters(conn, active_tag, self.base_y)?;
+            self.cache.active_tag = active_tag;
+            self.cache.used_tags = tag_bitmask;
         }
-        self.draw_text(conn, &bar_text, self.base_x + 16, self.base_y)?;
+
+        if let Some(window) = active_window {
+            let text = conn.get_window_name(window)?;
+            if let Some(cached_text) = self.cache.names.get(&window) {
+                if *cached_text != text {
+                    self.draw_window_properties(conn, &text)?;
+                    self.cache.names.entry(window).and_modify(|s| *s = text);
+                }
+            } else {
+                self.draw_window_properties(conn, &text)?;
+                self.cache.names.entry(window).and_modify(|s| *s = text);
+            }
+            self.draw_icon(conn, window)?;
+        } else {
+            self.draw_window_properties(conn, "")?;
+        }
+
         self.draw_status_bar(conn)?;
         self.clear_and_copy_bar(conn)?;
         Ok(())
     }
 
+    /// aaa
+    fn draw_window_properties(&mut self, conn: &impl ConnectionActionExt, text: &str) -> Res {
+        // let length = self.text.get_text_length(text);
+        conn.fill_rectangle(
+            self.pixmap,
+            self.inverted_gc,
+            Rectangle {
+                x: self.bar.height as i16 * TAG_COUNT as i16,
+                y: 0,
+                width: self.bar.width - self.bar.height * TAG_COUNT as u16,
+                height: self.bar.height,
+            },
+        )?;
+        self.draw_text(conn, text, self.base_x + 16, self.base_y)?;
+        Ok(())
+    }
+
     /// Draws the window icon to the bar.
+    ///
+    /// An icon is an ARGB byte sequence with the first eight bytes being the width and height of the icon.
+    ///
+    /// An icon can be of any size and usually we need to scale it up or down to match the font size.
+    ///
+    /// We also cache icons pertaining to a window to not have to calculate and draw the icon every refresh, and drop them when the window is dropped.
+    /// # Errors
+    /// Returns an error if the window is invalid.
     fn draw_icon(
         &mut self,
         conn: &(impl ConnectionActionExt + ConnectionAtomExt),
         window: Window,
     ) -> Res {
-        let icon = if let Some(icon) = self.icons.get(&window) {
+        let icon = if let Some(icon) = self.cache.icons.get(&window) {
             icon
         } else {
             let icon_with_dimensions = conn.get_icon(window)?;
             if icon_with_dimensions.is_empty() {
                 return Ok(());
             }
-            let width = u32::from_ne_bytes(icon_with_dimensions[0..4].try_into().unwrap());
-            let height = u32::from_ne_bytes(icon_with_dimensions[4..8].try_into().unwrap());
-            let ratio = height as f32 / self.text.metrics.height as f32;
 
-            let buff =
-                ImageBuffer::<Rgba<u8>, _>::from_raw(width, height, icon_with_dimensions).unwrap();
+            let width = u32::from_ne_bytes(
+                icon_with_dimensions[0..4]
+                    .try_into()
+                    .unwrap_or([0, 0, 0, 0]),
+            );
+            let height = u32::from_ne_bytes(
+                icon_with_dimensions[4..8]
+                    .try_into()
+                    .unwrap_or([0, 0, 0, 0]),
+            );
 
-            let width = (width as f32 / ratio).round() as u32;
-            let height = (height as f32 / ratio).round() as u32;
-
-            let icon = Icon {
+            let Ok(icon) = self.text.resize_image_to_text_height(Image {
                 width,
                 height,
-                data: crate::render::blend_image_with_background(
-                    &imageops::resize(&buff, width, height, imageops::FilterType::Lanczos3),
-                    self.text.colors.foreground,
-                ),
+                data: icon_with_dimensions,
+            }) else {
+                return Ok(());
             };
 
-            self.icons.insert(window, icon);
-            self.icons.get(&window).unwrap()
+            self.cache.icons.insert(window, icon);
+            let Some(icon) = self.cache.icons.get(&window) else {
+                return Ok(());
+            };
+            icon
         };
 
         conn.draw_to_pixmap(
@@ -200,10 +253,18 @@ impl BarPainter {
 
         log::trace!("drawing root windows name on bar with text: {status_text}");
 
-        let length = status_text.chars().fold(0, |acc, c| {
-            let metrics = self.text.get_metrics(c);
-            acc + metrics.advance_width as i16
-        });
+        let length = self.text.get_text_length(&status_text);
+
+        conn.fill_rectangle(
+            self.pixmap,
+            self.inverted_gc,
+            Rectangle {
+                x: self.bar.width as i16 - length,
+                y: 0,
+                width: length as u16,
+                height: self.bar.height,
+            },
+        )?;
 
         self.draw_text(
             conn,
@@ -226,37 +287,40 @@ impl BarPainter {
     /// Indicator rectangles are smaller and occupy the top left side of the outer rectangle.
     ///
     /// These rectangles are drawn on the left side of the bar.
-    fn draw_rectangles(&self, state: &StateHandler, conn: &impl ConnectionActionExt) -> Res {
-        let rectangles = (1..=TAG_COUNT)
-            .filter(|x| *x != state.active_tag + 1 && !state.tags[x - 1].windows.is_empty())
-            .map(|x| Rectangle {
-                x: self.bar.height as i16 * (x as i16 - 1) + self.bar.height as i16 / 7,
-                y: self.bar.height as i16 / 7,
-                width: self.bar.height / 6,
-                height: self.bar.height / 6,
-            })
-            .chain(std::iter::once(
-                self.create_tag_rectangle(state.active_tag + 1),
-            ))
-            .collect::<Vec<Rectangle>>();
+    fn draw_rectangles(
+        &mut self,
+        active_tag: usize,
+        tag_bitmask: u16,
+        conn: &impl ConnectionActionExt,
+    ) -> Res {
+        conn.fill_rectangle(
+            self.pixmap,
+            self.gc,
+            self.create_tag_rectangle(active_tag + 1),
+        )?;
 
-        rectangles
-            .iter()
-            .try_for_each(|r| conn.fill_rectangle(self.pixmap, self.gc, *r))?;
-
-        if !state.tags[state.active_tag].windows.is_empty() {
+        if tag_is_active(tag_bitmask, active_tag) {
             conn.fill_rectangle(
                 self.pixmap,
                 self.inverted_gc,
                 Rectangle {
-                    x: self.bar.height as i16 * (state.active_tag as i16)
-                        + self.bar.height as i16 / 7,
+                    x: self.bar.height as i16 * (active_tag as i16) + self.bar.height as i16 / 7,
                     y: self.bar.height as i16 / 7,
                     width: self.bar.height / 6,
                     height: self.bar.height / 6,
                 },
             )?;
         }
+
+        (0..TAG_COUNT)
+            .filter(|x| *x != active_tag && tag_is_active(tag_bitmask, *x))
+            .map(|x| Rectangle {
+                x: self.bar.height as i16 * (x as i16) + self.bar.height as i16 / 7,
+                y: self.bar.height as i16 / 7,
+                width: self.bar.height / 6,
+                height: self.bar.height / 6,
+            })
+            .try_for_each(|r| conn.fill_rectangle(self.pixmap, self.gc, r))?;
 
         Ok(())
     }
@@ -265,7 +329,7 @@ impl BarPainter {
     ///
     /// The active tag's number has inverted colors.
     fn draw_tag_letters(
-        &self,
+        &mut self,
         conn: &impl ConnectionActionExt,
         active_tag: usize,
         base_y: i16,
@@ -353,4 +417,9 @@ impl BarPainter {
         )?;
         Ok(())
     }
+}
+
+/// Returns true if the tag has a window in it, with the bitmask representing all the tags and their activity.
+fn tag_is_active(bitmask: u16, tag: usize) -> bool {
+    bitmask & (1 << tag) != 0
 }

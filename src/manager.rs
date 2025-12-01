@@ -115,7 +115,8 @@ impl<C: Connection> EventHandler<'_, C> {
                 .collect::<Vec<u32>>(),
         )?;
 
-        self.bar.icons.remove(&window.window);
+        self.bar.cache.icons.remove(&window.window);
+        self.bar.cache.names.remove(&window.window);
         self.state
             .get_mut_active_tag_windows()
             .retain(|w| w.window != event.window);
@@ -367,10 +368,12 @@ impl<C: Connection> EventHandler<'_, C> {
     }
 
     pub fn draw_bar(&mut self) {
-        if let Err(error) = self
-            .bar
-            .draw_bar(&self.state, &self.conn, self.state.get_focus())
-        {
+        if let Err(error) = self.bar.draw_bar(
+            self.state.active_tag,
+            self.state.get_tag_bitmask(),
+            &self.conn,
+            self.state.get_focus(),
+        ) {
             log::error!("{error}");
         }
     }

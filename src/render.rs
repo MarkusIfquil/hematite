@@ -3,6 +3,7 @@
 use std::{fs, process::exit};
 
 use fontdue::{Font, Metrics};
+use image::{ImageBuffer, Rgba, imageops};
 
 use crate::config::Config;
 /// The font's foreground and background color.
@@ -11,6 +12,16 @@ pub struct Colors {
     pub foreground: (u8, u8, u8),
     /// This determines the text's background.
     pub background: (u8, u8, u8),
+}
+
+/// An image with width, height, and data.
+pub struct Image {
+    /// The width of the image.
+    pub width: u32,
+    /// The height of the image.
+    pub height: u32,
+    /// The bytes (in ARGB) of the image.
+    pub data: Vec<u8>,
 }
 
 /// A helper for drawing with fonts.
@@ -80,6 +91,43 @@ impl TextHandler {
     pub fn get_metrics(&self, c: char) -> Metrics {
         self.font.metrics(c, self.metrics.height as f32)
     }
+
+    /// Gets the width of the specified string.
+    #[must_use]
+    pub fn get_text_length(&self, text: &str) -> i16 {
+        text.chars().fold(0, |acc, c| {
+            let metrics = self.get_metrics(c);
+            acc + metrics.advance_width as i16
+        })
+    }
+
+    /// Resizes an image to the metric height.
+    /// # Errors
+    /// Converting to an rgba buffer may result in an error, in which case no Image is returned.
+    pub fn resize_image_to_text_height(&self, image: Image) -> Result<Image, ()> {
+        let ratio = image.height as f32 / self.metrics.height as f32;
+
+        let Some(buff) = ImageBuffer::<Rgba<u8>, _>::from_raw(
+            image.width,
+            image.height,
+            image.data,
+        ) else {
+            log::error!("icon couldn't be converted into an rgba buffer!");
+            return Err(());
+        };
+
+        let width = (image.width as f32 / ratio).round() as u32;
+        let height = (image.height as f32 / ratio).round() as u32;
+
+        Ok(Image {
+            width,
+            height,
+            data: crate::render::blend_image_with_background(
+                &imageops::resize(&buff, width, height, imageops::FilterType::Lanczos3),
+                self.colors.foreground,
+            ),
+        })
+    }
 }
 
 /// Determines the blended combination of both colors with the specified alpha mask.
@@ -89,15 +137,15 @@ fn alpha_interpolate(color1: u8, color2: u8, alpha: u8) -> u8 {
         as u8
 }
 
-#[must_use] 
+#[must_use]
 pub fn blend_image_with_background(bytes: &[u8], background: (u8, u8, u8)) -> Vec<u8> {
-    (0..bytes.len()-3)
+    (0..bytes.len() - 3)
         .step_by(4)
         .flat_map(|i| {
             [
-                alpha_interpolate(bytes[i], background.2, bytes[i+3]),
-                alpha_interpolate(bytes[i+1], background.1, bytes[i+3]),
-                alpha_interpolate(bytes[i+2], background.0, bytes[i+3]),
+                alpha_interpolate(bytes[i], background.2, bytes[i + 3]),
+                alpha_interpolate(bytes[i + 1], background.1, bytes[i + 3]),
+                alpha_interpolate(bytes[i + 2], background.0, bytes[i + 3]),
                 0xFF,
             ]
         })

@@ -330,6 +330,16 @@ impl StateHandler {
         log::trace!("Manager state:\n{self}");
     }
 
+    /// Gets the tags that have a window in them and represents them in a bitmask.
+    #[must_use]
+    pub fn get_tag_bitmask(&self) -> u16 {
+        self.tags
+            .iter()
+            .enumerate()
+            .map(|(i, t)| u16::from(!t.windows.is_empty()) << i)
+            .fold(0, |acc, n| acc | n)
+    }
+
     /// Gets the index of a window in the active tag based on its id.
     ///
     /// Returns `None` if no such window exists.
