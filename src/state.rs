@@ -225,7 +225,7 @@ impl StateHandler {
     ///
     /// `Stack` windows are in a "stack group", where they are positioned top to bottom according to where they are in the list. Their size depends on how many windows there are, with the whole Stack group taking the entire space of its side of the dividing line.
     ///
-    /// `Floating` windows do not obey stacking rules are are drawn on top of all other windows (except `Fullscreen` windows).
+    /// `Floating` windows do not obey stacking rules are are drawn on top of all other windows (except `Fullscreen` windows) and at the center of the screen.
     ///
     /// `Fullscreen` windows take up the entire screen and hide all other windows.
     pub fn tile_windows(&mut self) {
@@ -235,7 +235,12 @@ impl StateHandler {
         let (max_width, max_height) = (self.tiling.max_width, self.tiling.max_height);
         let bar_height = self.tiling.bar_height;
 
-        let stack_count = self.get_active_tag_windows().len().clamp(1, 100) - 1;
+        let stack_count = self
+            .get_active_tag_windows()
+            .iter()
+            .filter(|w| w.group == WindowGroup::Stack)
+            .count()
+            .clamp(0, 100);
 
         self.get_mut_active_tag_windows()
             .iter_mut()

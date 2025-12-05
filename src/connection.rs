@@ -109,7 +109,7 @@ pub trait ConnectionStateExt {
     /// Configures a window based on a `ConfigureRequestEvent`.
     /// # Errors
     /// Returns an error if the event specifies the wrong parameters.
-    fn handle_config(&self, event: ConfigureRequestEvent) -> Res;
+    fn handle_config(&self, event: ConfigureRequestEvent, window: &mut WindowState) -> Res;
 }
 
 /// Defines the more abstract directions you can give to the X11 server, like drawing to a pixmap or killing the focused window.
@@ -224,7 +224,13 @@ pub trait ConnectionAtomExt {
     /// Gets the icon data of the window.
     /// # Errors
     /// Returns an error if the window doesn't exist.
-    fn get_icon(&self, window: Window) -> Result<Vec<u8>,ReplyOrIdError>;
+    fn get_icon(&self, window: Window) -> Result<Vec<u8>, ReplyOrIdError>;
+    /// Gets the window hints and determines if the specified window wants to be floating or not.
+    ///
+    /// Floating logic is determined by checking the min and max widths and heights. If they are the same, then the window is floating and receives its requested width and height in the middle of the screen.
+    /// # Errors
+    /// Returns an error if the window doesn't exist.
+    fn should_be_floating(&self, window: Window) -> Result<(u16, u16, bool), ReplyOrIdError>;
 }
 
 /// An implementation of the Connection traits, with additional information like config, screen and atom list.
@@ -294,7 +300,7 @@ impl<C: Connection> ConnectionStateExt for ConnectionHandler<'_, C> {
         Ok(())
     }
 
-    fn handle_config(&self, event: ConfigureRequestEvent) -> Res {
+    fn handle_config(&self, event: ConfigureRequestEvent, window: &mut WindowState) -> Res {
         log::trace!(
             "EVENT CONFIG w {} x {} y {} w {} self.bar.height {}",
             event.window,
@@ -305,6 +311,16 @@ impl<C: Connection> ConnectionStateExt for ConnectionHandler<'_, C> {
         );
         let aux = ConfigureWindowAux::from_configure_request(&event);
         self.conn.configure_window(event.window, &aux)?;
+
+        if window.group == WindowGroup::Floating {
+            window.x = event.x;
+            window.y = event.y;
+            window.width = event.width;
+            window.height = event.height;
+        }
+
+        self.config_window_from_state(window)?;
+
         Ok(())
     }
 
@@ -432,7 +448,6 @@ impl<C: Connection> ConnectionStateExt for ConnectionHandler<'_, C> {
 
     fn set_fullscreen(&self, window: &WindowState) -> Res {
         log::trace!("setting window to fullscreen {}", window.window);
-        // self.config_window_from_state(window)?;
         self.net_set_state_fullscreen(window.window)?;
         self.conn.configure_window(
             window.frame_window,
@@ -765,9 +780,28 @@ impl<C: Connection> ConnectionAtomExt for ConnectionHandler<'_, C> {
         )?;
         Ok(())
     }
-    
-    fn get_icon(&self, window: Window) -> Result<Vec<u8>,ReplyOrIdError> {
-        self.atoms.get_property(window, self.atoms.net_wm_icon, AtomEnum::CARDINAL)
+
+    fn get_icon(&self, window: Window) -> Result<Vec<u8>, ReplyOrIdError> {
+        self.atoms
+            .get_property(window, self.atoms.net_wm_icon, AtomEnum::CARDINAL)
+    }
+
+    fn should_be_floating(&self, window: Window) -> Result<(u16, u16, bool), ReplyOrIdError> {
+        unsafe {
+            let hints_data = self.atoms.get_property(
+                window,
+                AtomEnum::WM_NORMAL_HINTS.into(),
+                AtomEnum::WM_SIZE_HINTS,
+            )?;
+            let hints = hints_data.align_to::<u32>().1;
+            let width = hints[5];
+            let height = hints[6];
+            if width == hints[7] && height == hints[8] && width != 0 && height != 0 {
+                Ok((width as u16, height as u16, true))
+            } else {
+                Ok((10, 10, false))
+            }
+        }
     }
 }
 

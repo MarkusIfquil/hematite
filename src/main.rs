@@ -15,6 +15,7 @@
 //! See the `manager` module for the core logic implementation. Everything else is some kind of helper that abstracts away the various properties of the program.
 
 // Xephyr -br -ac -noreset -screen 800x600 :1
+// DISPLAY=:1 RUST_BACKTRACE=1 RUST_LOG=debug hematite
 #![warn(clippy::correctness)]
 #![warn(clippy::suspicious)]
 #![warn(clippy::complexity)]
@@ -88,19 +89,17 @@ pub fn main() -> Result<(), Box<dyn Error>> {
     let config = Config::from(ConfigDeserialized::new());
     let conn_handler = ConnectionHandler::new(&conn, screen_num, &config)?;
     let bar = BarPainter::new(&conn_handler, &conn_handler.colors, &config)?;
-    let keys = KeyHandler::new(&conn, &config)?;
-    let state = StateHandler::new(TilingInfo {
-        gap: config.spacing as u16,
-        ratio: config.ratio,
-        max_width: conn_handler.screen.width_in_pixels,
-        max_height: conn_handler.screen.height_in_pixels,
-        bar_height: bar.bar.height,
-    });
 
     let mut event_handler = EventHandler {
+        state: StateHandler::new(TilingInfo {
+            gap: config.spacing as u16,
+            ratio: config.ratio,
+            max_width: conn_handler.screen.width_in_pixels,
+            max_height: conn_handler.screen.height_in_pixels,
+            bar_height: bar.bar.height,
+        }),
         conn: conn_handler,
-        state,
-        key: keys,
+        key: KeyHandler::new(&conn, &config)?,
         bar,
     };
 

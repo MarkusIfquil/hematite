@@ -1,6 +1,6 @@
 //!
 //! This module provides a helper for the mess that is X11 atom handling.
-use std::{collections::HashMap};
+use std::collections::HashMap;
 
 use x11rb::{
     connection::Connection,
@@ -58,6 +58,22 @@ pub struct Atoms<'a, C> {
     pub wm_state: Atom,
     /// The window deletion protocol.
     pub wm_delete_window: Atom,
+    pub net_wm_window_type: Atom,
+    pub net_wm_window_type_desktop: Atom,
+    pub net_wm_window_type_dock: Atom,
+    pub net_wm_window_type_toolbar: Atom,
+    pub net_wm_window_type_menu: Atom,
+    pub net_wm_window_type_utility: Atom,
+    pub net_wm_window_type_splash: Atom,
+    pub net_wm_window_type_dialog: Atom,
+    pub net_wm_window_type_dropdown_menu: Atom,
+    pub net_wm_window_type_popup_menu: Atom,
+    pub net_wm_window_type_tooltip: Atom,
+    pub net_wm_window_type_notification: Atom,
+    pub net_wm_window_type_combo: Atom,
+    pub net_wm_window_type_dnd: Atom,
+    pub net_wm_window_type_normal: Atom,
+    pub wm_transient_for: Atom,
 }
 
 impl<'a, C: Connection> Atoms<'a, C> {
@@ -89,11 +105,27 @@ impl<'a, C: Connection> Atoms<'a, C> {
             "_NET_WM_ACTION_FULLSCREEN",
             "_NET_WM_USER_TIME",
             "_NET_WM_ICON",
+            "_NET_WM_WINDOW_TYPE",
+            "_NET_WM_WINDOW_TYPE_DESKTOP",
+            "_NET_WM_WINDOW_TYPE_DOCK",
+            "_NET_WM_WINDOW_TYPE_TOOLBAR",
+            "_NET_WM_WINDOW_TYPE_MENU",
+            "_NET_WM_WINDOW_TYPE_UTILITY",
+            "_NET_WM_WINDOW_TYPE_SPLASH",
+            "_NET_WM_WINDOW_TYPE_DIALOG",
+            "_NET_WM_WINDOW_TYPE_DROPDOWN_MENU",
+            "_NET_WM_WINDOW_TYPE_POPUP_MENU",
+            "_NET_WM_WINDOW_TYPE_TOOLTIP",
+            "_NET_WM_WINDOW_TYPE_NOTIFICATION",
+            "_NET_WM_WINDOW_TYPE_COMBO",
+            "_NET_WM_WINDOW_TYPE_DND",
+            "_NET_WM_WINDOW_TYPE_NORMAL",
             "UTF8_STRING",
             "WM_NAME",
             "WM_PROTOCOLS",
             "WM_STATE",
             "WM_DELETE_WINDOW",
+            "WM_TRANSIENT_FOR",
         ];
 
         let atom_nums = get_atom_nums(conn, &atom_strings);
@@ -118,10 +150,26 @@ impl<'a, C: Connection> Atoms<'a, C> {
             net_wm_allowed_actions: atoms["_NET_WM_ALLOWED_ACTIONS"],
             net_wm_action_fullscreen: atoms["_NET_WM_ACTION_FULLSCREEN"],
             net_wm_icon: atoms["_NET_WM_ICON"],
+            net_wm_window_type: atoms["_NET_WM_WINDOW_TYPE"],
+            net_wm_window_type_desktop: atoms["_NET_WM_WINDOW_TYPE_DESKTOP"],
+            net_wm_window_type_dock: atoms["_NET_WM_WINDOW_TYPE_DOCK"],
+            net_wm_window_type_toolbar: atoms["_NET_WM_WINDOW_TYPE_TOOLBAR"],
+            net_wm_window_type_menu: atoms["_NET_WM_WINDOW_TYPE_MENU"],
+            net_wm_window_type_utility: atoms["_NET_WM_WINDOW_TYPE_UTILITY"],
+            net_wm_window_type_splash: atoms["_NET_WM_WINDOW_TYPE_SPLASH"],
+            net_wm_window_type_dialog: atoms["_NET_WM_WINDOW_TYPE_DIALOG"],
+            net_wm_window_type_dropdown_menu: atoms["_NET_WM_WINDOW_TYPE_DROPDOWN_MENU"],
+            net_wm_window_type_popup_menu: atoms["_NET_WM_WINDOW_TYPE_POPUP_MENU"],
+            net_wm_window_type_tooltip: atoms["_NET_WM_WINDOW_TYPE_TOOLTIP"],
+            net_wm_window_type_notification: atoms["_NET_WM_WINDOW_TYPE_NOTIFICATION"],
+            net_wm_window_type_combo: atoms["_NET_WM_WINDOW_TYPE_COMBO"],
+            net_wm_window_type_dnd: atoms["_NET_WM_WINDOW_TYPE_DND"],
+            net_wm_window_type_normal: atoms["_NET_WM_WINDOW_TYPE_NORMAL"],
             utf8_string: atoms["UTF8_STRING"],
             wm_protocols: atoms["WM_PROTOCOLS"],
             wm_state: atoms["WM_STATE"],
             wm_delete_window: atoms["WM_DELETE_WINDOW"],
+            wm_transient_for: atoms["WM_TRANSIENT_FOR"],
         };
         new_self.setup_atoms(screen, &atom_nums)?;
         Ok(new_self)

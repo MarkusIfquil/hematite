@@ -84,7 +84,33 @@ impl<C: Connection> EventHandler<'_, C> {
             event.response_type
         );
 
-        let window = WindowState::new(event.window, self.conn.generate_id()?);
+        let (width, height, should_be_floating) = self.conn.should_be_floating(event.window)?;
+
+        let screen = self.conn.get_screen_geometry();
+
+        let window = if should_be_floating {
+            WindowState {
+                window: event.window,
+                frame_window: self.conn.generate_id()?,
+                x: screen.0 as i16 / 2 - width as i16 / 2,
+                y: screen.1 as i16 / 2 - height as i16 / 2,
+                width,
+                height,
+                group: WindowGroup::Floating,
+            }
+        } else {
+            WindowState {
+                window: event.window,
+                frame_window: self.conn.generate_id()?,
+                x: 0,
+                y: 0,
+                width,
+                height,
+                group: WindowGroup::Stack,
+            }
+        };
+
+        log::trace!("new window = {window:?}");
 
         self.conn.add_window(&window)?;
         self.state.add_window(window);
@@ -180,7 +206,7 @@ impl<C: Connection> EventHandler<'_, C> {
     /// Handles enters from window to window and window to root. Also refreshes the display.
     fn handle_enter(&mut self, event: EnterNotifyEvent) -> Res {
         log::trace!(
-            "EVENT ENTER child {} detail {:?} event {}",
+            "event enter child {} detail {:?} event {}",
             event.child,
             event.detail,
             event.event
@@ -199,9 +225,19 @@ impl<C: Connection> EventHandler<'_, C> {
     /// Handles a `ConfigureRequestEvent`.
     ///
     /// Only configures the window if it exists in the state.
-    fn handle_config(&self, event: ConfigureRequestEvent) -> Res {
-        if self.state.get_window_state(event.window).is_some() {
-            self.conn.handle_config(event)?;
+    fn handle_config(&mut self, event: ConfigureRequestEvent) -> Res {
+        log::trace!(
+            "event config window {} x {} y {} w {} h {}",
+            event.window,
+            event.x,
+            event.y,
+            event.width,
+            event.height
+        );
+        if let Some(state) = self.state.get_mut_window_state(event.window)
+            && state.group == WindowGroup::Floating
+        {
+            self.conn.handle_config(event, state)?;
         }
         Ok(())
     }
@@ -243,13 +279,13 @@ impl<C: Connection> EventHandler<'_, C> {
             let window = state.window;
             match data[0] {
                 0 => {
-                    log::debug!("setting group of {window} to stack!");
+                    log::trace!("setting group of {window} to stack");
                     state.group = WindowGroup::Stack;
                     self.conn.remove_fullscreen(state)?;
                     self.refresh()?;
                 }
                 1 => {
-                    log::debug!("setting group of {window} to fullscreen!");
+                    log::trace!("setting group of {window} to fullscreen");
                     state.group = WindowGroup::Fullscreen;
                     self.conn.set_fullscreen(state)?;
                     self.refresh()?;
@@ -302,7 +338,7 @@ impl<C: Connection> EventHandler<'_, C> {
     /// Only switching between two different tags is permitted.
     fn change_active_tag(&mut self, tag: usize) -> Res {
         if self.state.active_tag == tag {
-            log::debug!("tried switching to already active tag");
+            log::trace!("tried switching to already active tag");
             return Ok(());
         }
         log::trace!("changing tag to {tag}");
@@ -342,7 +378,7 @@ impl<C: Connection> EventHandler<'_, C> {
     /// Only moving to a different tag is permitted.
     fn move_window(&mut self, tag: usize) -> Res {
         if self.state.active_tag == tag {
-            log::debug!("tried moving window to already active tag");
+            log::trace!("tried moving window to already active tag");
             return Ok(());
         }
         log::trace!("moving window to tag {tag}");

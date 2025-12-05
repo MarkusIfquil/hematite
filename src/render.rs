@@ -24,8 +24,8 @@ pub struct Image {
     pub data: Vec<u8>,
 }
 
-/// A helper for drawing with fonts.
-pub struct TextHandler {
+/// A helper for drawing with fonts and manipulating image byte sequences.
+pub struct ImageHandler {
     /// The font provided in configuration.
     font: Font,
     /// The metrics (width, height) of the char 'A'.
@@ -34,7 +34,7 @@ pub struct TextHandler {
     pub colors: Colors,
 }
 
-impl TextHandler {
+impl ImageHandler {
     /// Creates a new helper.
     #[must_use]
     pub fn new(config: &Config) -> Self {
@@ -104,7 +104,8 @@ impl TextHandler {
     /// Resizes an image to the metric height.
     /// # Errors
     /// Converting to an rgba buffer may result in an error, in which case no Image is returned.
-    pub fn resize_image_to_text_height(&self, image: Image) -> Result<Image, ()> {
+    #[must_use] 
+    pub fn resize_image_to_text_height(&self, image: Image) -> Option<Image> {
         let ratio = image.height as f32 / self.metrics.height as f32;
 
         let Some(buff) = ImageBuffer::<Rgba<u8>, _>::from_raw(
@@ -113,13 +114,13 @@ impl TextHandler {
             image.data,
         ) else {
             log::error!("icon couldn't be converted into an rgba buffer!");
-            return Err(());
+            return None;
         };
 
         let width = (image.width as f32 / ratio).round() as u32;
         let height = (image.height as f32 / ratio).round() as u32;
 
-        Ok(Image {
+        Some(Image {
             width,
             height,
             data: crate::render::blend_image_with_background(
@@ -131,12 +132,15 @@ impl TextHandler {
 }
 
 /// Determines the blended combination of both colors with the specified alpha mask.
+/// 
+/// Alpha blending uses the formula: alpha * c1 + (1 - alpha) * c2.
 #[must_use]
 fn alpha_interpolate(color1: u8, color2: u8, alpha: u8) -> u8 {
     ((u32::from(color1) * u32::from(alpha) + (255 - u32::from(alpha)) * u32::from(color2)) / 255)
         as u8
 }
 
+/// Blends the image buffer with the specified background color. Image must be BGRA.
 #[must_use]
 pub fn blend_image_with_background(bytes: &[u8], background: (u8, u8, u8)) -> Vec<u8> {
     (0..bytes.len() - 3)
@@ -156,7 +160,7 @@ pub fn blend_image_with_background(bytes: &[u8], background: (u8, u8, u8)) -> Ve
 ///
 /// May return an error if the file is missing or the font is damaged.
 fn get_font_file(path: &str) -> Result<Font, Box<dyn std::error::Error>> {
-    log::debug!("loading font from {path}");
+    log::info!("loading font from {path}");
     let file = match fs::read(path) {
         Ok(f) => f,
         Err(e) => {

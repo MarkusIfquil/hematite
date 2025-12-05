@@ -11,7 +11,7 @@ use x11rb::{
 use crate::{
     config::Config,
     connection::{Colors, ConnectionActionExt, ConnectionAtomExt, ConnectionStateExt, Res},
-    render::{Image, TextHandler},
+    render::{Image, ImageHandler},
     state::{WindowGroup, WindowState},
 };
 
@@ -58,7 +58,7 @@ pub struct BarPainter {
     /// A graphics context with inverted colors to draw highlighted elements.
     inverted_gc: Gcontext,
     /// A helper for drawing text.
-    text: TextHandler,
+    image: ImageHandler,
     /// A cache for reducing draw calls.
     pub cache: Cache,
 }
@@ -77,7 +77,7 @@ impl BarPainter {
 
         conn.create_gc(gc, colors.main, colors.secondary)?;
         conn.create_gc(inverted_gc, colors.secondary, colors.main)?;
-        let text = TextHandler::new(config);
+        let text = ImageHandler::new(config);
 
         let pixmap = conn.generate_id()?;
 
@@ -105,7 +105,7 @@ impl BarPainter {
             pixmap,
             gc,
             inverted_gc,
-            text,
+            image: text,
             cache: Cache::default(),
         })
     }
@@ -216,7 +216,7 @@ impl BarPainter {
                     .unwrap_or([0, 0, 0, 0]),
             );
 
-            let Ok(icon) = self.text.resize_image_to_text_height(Image {
+            let Some(icon) = self.image.resize_image_to_text_height(Image {
                 width,
                 height,
                 data: icon_with_dimensions,
@@ -253,7 +253,7 @@ impl BarPainter {
 
         log::trace!("drawing root windows name on bar with text: {status_text}");
 
-        let length = self.text.get_text_length(&status_text);
+        let length = self.image.get_text_length(&status_text);
 
         conn.fill_rectangle(
             self.pixmap,
@@ -299,7 +299,7 @@ impl BarPainter {
             self.create_tag_rectangle(active_tag + 1),
         )?;
 
-        if tag_is_active(tag_bitmask, active_tag) {
+        if tag_is_used(tag_bitmask, active_tag) {
             conn.fill_rectangle(
                 self.pixmap,
                 self.inverted_gc,
@@ -313,7 +313,7 @@ impl BarPainter {
         }
 
         (0..TAG_COUNT)
-            .filter(|x| *x != active_tag && tag_is_active(tag_bitmask, *x))
+            .filter(|x| *x != active_tag && tag_is_used(tag_bitmask, *x))
             .map(|x| Rectangle {
                 x: self.bar.height as i16 * (x as i16) + self.bar.height as i16 / 7,
                 y: self.bar.height as i16 / 7,
@@ -336,19 +336,19 @@ impl BarPainter {
     ) -> Res {
         (1..=TAG_COUNT).try_for_each(|x| {
             if x == active_tag + 1 {
-                let (metrics, data) = self.text.rasterize_letter(
+                let (metrics, data) = self.image.rasterize_letter(
                     char::from_digit(x as u32, 10).unwrap_or_default(),
-                    self.text.colors.foreground,
-                    self.text.colors.background,
+                    self.image.colors.foreground,
+                    self.image.colors.background,
                 );
                 let base_x = self.bar.height * (x as u16 - 1)
                     + (self.bar.height / 2 - (metrics.advance_width as u16 / 2));
                 self.put_text_data(conn, metrics, data.as_slice(), base_x as i16, base_y)?;
             } else {
-                let (metrics, data) = self.text.rasterize_letter(
+                let (metrics, data) = self.image.rasterize_letter(
                     char::from_digit(x as u32, 10).unwrap_or_default(),
-                    self.text.colors.background,
-                    self.text.colors.foreground,
+                    self.image.colors.background,
+                    self.image.colors.foreground,
                 );
                 let base_x = self.bar.height * (x as u16 - 1)
                     + (self.bar.height / 2 - (metrics.advance_width as u16 / 2));
@@ -362,8 +362,6 @@ impl BarPainter {
     /// Draws the window's name next to the tags.
     ///
     /// If on the root window or the window doesn't have a name, nothing is displayed.
-    ///
-    /// There is a limit of 50 characters.
     fn draw_text(
         &self,
         conn: &impl ConnectionActionExt,
@@ -373,10 +371,10 @@ impl BarPainter {
     ) -> Res {
         let mut total_width = 0;
         text.chars().try_for_each(|c| {
-            let (metrics, data) = self.text.rasterize_letter(
+            let (metrics, data) = self.image.rasterize_letter(
                 c,
-                self.text.colors.background,
-                self.text.colors.foreground,
+                self.image.colors.background,
+                self.image.colors.foreground,
             );
             self.put_text_data(conn, metrics, data.as_slice(), base_x + total_width, base_y)?;
             total_width += metrics.advance_width as i16;
@@ -419,7 +417,9 @@ impl BarPainter {
     }
 }
 
-/// Returns true if the tag has a window in it, with the bitmask representing all the tags and their activity.
-fn tag_is_active(bitmask: u16, tag: usize) -> bool {
+/// Returns true if the specified tag has a window in it.
+/// 
+/// The bitmask represents a list of booleans indicating whether a tag has a window in it.
+fn tag_is_used(bitmask: u16, tag: usize) -> bool {
     bitmask & (1 << tag) != 0
 }
