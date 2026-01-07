@@ -17,7 +17,7 @@ It is **fast** and **efficient**, refreshing only when necessary and contains as
 
 It is **opinionated**, contains no support for external scripting, with a minimal config file for appearance. It also contains only one tiling layout, which is master-stack.
 # installation
-## 1. Build from source (recommended installation)
+## Build from source (recommended installation)
 ### clone the repository
 ```sh
 git clone git@github.com:MarkusIfquil/hematite.git
@@ -32,6 +32,8 @@ sudo cargo install --path . --root /usr
 ```sh
 exec hematite &
 ```
+
+See the configuration section when running hematite for the first time as you will likely need to install/provide/replace certain programs that hematite assumes by default.
 
 # dependencies
 
