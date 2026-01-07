@@ -44,12 +44,23 @@ hematite is made to contain as few implementation dependencies (that you need to
 - rust (build): >= 1.74.0
 
 # next steps
+## compositor
+`picom` is recommended for smooth window transitions and transparency.
+### install picom
+### Arch Linux:
+```sh
+sudo pacman -S picom
+```
+### add to .xinitrc
+```sh
+picom &
+```
 ## status bar
-included in the repository is a bar script. adding it to your startup script displays status information on the bar.
+Included in the repository is a bar script. Adding it to your startup script displays status information on the bar.
 
 ### add to .xinitrc
 ```sh
-bash bar.sh &
+bash {path/to/bar.sh} &
 ```
 ## notifications
 `dunst` is recommended for showing notifications as it is also simple and lightweight.
@@ -65,7 +76,7 @@ dunst &
 ## background image
 `feh` is recommended for setting the wallpaper.
 ### install feh
-### Arch linux:
+### Arch Linux:
 ```sh
 sudo pacman -S feh
 ```
@@ -74,11 +85,11 @@ sudo pacman -S feh
 ~/.fehbg &
 ```
 # configuration
-configuration is set using the `config.toml` file located in your `.config/hematite` folder. A default one is provided when hematite is run for the first time.
+Configuration is set using the `config.toml` file located in your `.config/hematite` folder. A default one is provided when hematite is run for the first time.
 ## font
 FreeSans is used by default due to compatibility, but it is recommended to change it to a different font (for example [Jetbrains Mono Nerd](https://www.nerdfonts.com/). For TTF fonts the install path is usually `/usr/share/fonts/TTF/{font_name}.ttf`.
 ## hotkeys
-not all keys are supported by default. If you want to use a non-character key then you will have to add it manually in the code.
+Not all keys are supported by default. If you want to use a non-character key then you will have to add it manually in the code.
 
 # default hotkeys
 | Keybinding           | Description                                                            |
