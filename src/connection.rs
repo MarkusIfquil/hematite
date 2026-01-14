@@ -231,6 +231,10 @@ pub trait ConnectionAtomExt {
     /// # Errors
     /// Returns an error if the window doesn't exist.
     fn should_be_floating(&self, window: Window) -> Result<(u16, u16, bool), ReplyOrIdError>;
+    /// Sets the window class of the window.
+    /// # Errors
+    /// Returns an error if the window doesn't exist.
+    fn set_class(&self, class:&str, window: Window) -> Res;
 }
 
 /// An implementation of the Connection traits, with additional information like config, screen and atom list.
@@ -524,6 +528,7 @@ impl<C: Connection> ConnectionStateExt for ConnectionHandler<'_, C> {
         )?;
         Ok(())
     }
+
 }
 
 impl<C: Connection> ConnectionActionExt for ConnectionHandler<'_, C> {
@@ -714,6 +719,11 @@ impl<C: Connection> ConnectionActionExt for ConnectionHandler<'_, C> {
 }
 
 impl<C: Connection> ConnectionAtomExt for ConnectionHandler<'_, C> {
+    fn set_class(&self, class:&str, window: Window) -> Res {
+        self.atoms.change_string_prop(window, self.atoms.wm_class, class)?;
+        Ok(())
+    }
+
     fn net_update_client_list(&self, windows: &[Window]) -> Res {
         self.atoms
             .change_window_prop(self.screen.root, self.atoms.net_client_list, windows)?;
@@ -794,6 +804,9 @@ impl<C: Connection> ConnectionAtomExt for ConnectionHandler<'_, C> {
                 AtomEnum::WM_SIZE_HINTS,
             )?;
             let hints = hints_data.align_to::<u32>().1;
+            if hints.len() == 0 {
+                return Ok((10, 10, false));
+            }
             let width = hints[5];
             let height = hints[6];
             if width == hints[7] && height == hints[8] && width != 0 && height != 0 {

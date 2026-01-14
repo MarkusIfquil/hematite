@@ -68,7 +68,7 @@ impl BarPainter {
     /// # Errors
     /// Returns an error if the config or colors are incorrect.
     pub fn new(
-        conn: &(impl ConnectionActionExt + ConnectionStateExt),
+        conn: &(impl ConnectionActionExt + ConnectionStateExt + ConnectionAtomExt),
         colors: &Colors,
         config: &Config,
     ) -> Result<Self, ReplyOrIdError> {
@@ -97,7 +97,7 @@ impl BarPainter {
         conn.create_window(&bar)?;
         conn.add_window(&bar)?;
         conn.create_pixmap_from_win(pixmap, &bar)?;
-
+        conn.set_class("bar", bar.window)?;  
         Ok(Self {
             bar,
             base_x,

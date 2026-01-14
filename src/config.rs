@@ -287,12 +287,12 @@ impl Default for ConfigDeserialized {
             HotkeyConfig {
                 modifiers: String::new(),
                 key: "XF86_MonBrightnessUp".to_string(),
-                action: HotkeyAction::Spawn("sudo light -A 5".to_string()),
+                action: HotkeyAction::Spawn("light -A 5".to_string()),
             },
             HotkeyConfig {
                 modifiers: String::new(),
                 key: "XF86_MonBrightnessDown".to_string(),
-                action: HotkeyAction::Spawn("sudo light -U 5".to_string()),
+                action: HotkeyAction::Spawn("light -U 5".to_string()),
             },
         ];
         hotkeys.extend(

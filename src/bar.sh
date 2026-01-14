@@ -41,10 +41,5 @@ clock() {
 }
 
 while true; do
-  if [ $interval = 0 ] || [ $(($interval % 60)) = 0 ]; then
-    ~/.config/chadwm/scripts/battery.sh
-  fi
-  interval=$((interval + 1))
-
   sleep 1 && xsetroot -name "$(language) | $(wlan) | $(mem) | $(brightness) | $(audio) | $(battery) | $(clock)"
 done

@@ -74,6 +74,7 @@ pub struct Atoms<'a, C> {
     pub net_wm_window_type_dnd: Atom,
     pub net_wm_window_type_normal: Atom,
     pub wm_transient_for: Atom,
+    pub wm_class: Atom,
 }
 
 impl<'a, C: Connection> Atoms<'a, C> {
@@ -126,6 +127,7 @@ impl<'a, C: Connection> Atoms<'a, C> {
             "WM_STATE",
             "WM_DELETE_WINDOW",
             "WM_TRANSIENT_FOR",
+            "WM_CLASS",
         ];
 
         let atom_nums = get_atom_nums(conn, &atom_strings);
@@ -170,6 +172,7 @@ impl<'a, C: Connection> Atoms<'a, C> {
             wm_state: atoms["WM_STATE"],
             wm_delete_window: atoms["WM_DELETE_WINDOW"],
             wm_transient_for: atoms["WM_TRANSIENT_FOR"],
+            wm_class: atoms["WM_CLASS"],
         };
         new_self.setup_atoms(screen, &atom_nums)?;
         Ok(new_self)
